@@ -1,0 +1,15 @@
+discord bot/
+├── cogs/
+│   ├── __init__.py
+│   ├── economy.py
+│   └── shop.py
+│   └── misc.py
+│   └── bugreports.py
+├── utils/
+│   └── commands.py
+│   └── loader.py
+│   └── __init__.py
+├── .env
+├── main.py
+├── requirements.txt
+└── shop.json

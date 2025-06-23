@@ -1,0 +1,6 @@
+discord.py==2.5.2
+python-dotenv==1.1.0
+Flask==3.1.1
+pymongo[srv]==4.13.2
+async-timeout==4.0.2
+typing==3.7.4.3
