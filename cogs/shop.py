@@ -399,7 +399,7 @@ class shop(commands.Cog):
             color=discord.Color.blue()
         )
         embed.set_image(url="https://drive.google.com/uc?export=download&id=1TuINCr7OxWRqUf6fCLo_l_5bj_rBTd2k")
-        embed.set_footer(text="By _Suspected_ - 10/06/2025", icon_url=self.bot.user.avatar.url if self.bot.user.avatar else None)
+        embed.set_footer(text="By _Suspected_ - 23/06/2025", icon_url=self.bot.user.avatar.url if self.bot.user.avatar else None)
 
         await interaction.response.send_message(embed=embed, view=MainGUIButtons(self.bot))
 
