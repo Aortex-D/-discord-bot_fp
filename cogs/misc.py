@@ -127,7 +127,7 @@ class misc(commands.Cog):
             url=
             "https://drive.usercontent.google.com/download?id=10Rv5O9724GpyZIo5J264Wmc_JDumyi3Q&export=view&authuser=0"
         )
-        embed.set_footer(text=f"Updated by: {interaction.user.display_name}",
+        embed.set_footer(text=f"Updated by: .Suspected.",
                          icon_url=interaction.user.avatar.url
                          if interaction.user.avatar else None)
 
