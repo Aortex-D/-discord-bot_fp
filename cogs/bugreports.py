@@ -1,0 +1,1020 @@
+import os
+import discord
+import datetime
+from typing import Optional
+from discord.ext import commands
+from discord import app_commands, ui, Interaction
+from dotenv import load_dotenv
+from utils.loader import load_data, save_data, _get_db
+from utils.commands import get_admin_info
+from datetime import datetime, timezone
+import asyncio
+
+class BugReportManager:
+    def __init__(self, bot):
+        self.bot = bot
+        self.reports = load_data("bugrep")
+        # Ensure 'status' is present for existing reports or initialize
+        for report in self.reports:
+            if "status" not in report:
+                report["status"] = "pending"
+        self.next_id = max([report.get("id", 0) for report in self.reports]) + 1 if self.reports else 1
+
+    async def _load_reports(self):
+        reports = await asyncio.to_thread(load_data, "bugrep")
+        for report in reports:
+            if "status" not in report:
+                report["status"] = "pending"
+        return reports
+
+    async def _save_reports(self):
+        await asyncio.to_thread(save_data, "bugrep", self.reports)
+
+    async def add_report(self, report_data: dict):
+        report_data["id"] = self.next_id
+        report_data["status"] = "pending" # New reports are always pending initially 
+        self.reports.append(report_data)
+        await self._save_reports()
+        self.next_id += 1
+        return report_data["id"]
+
+    async def get_report_by_id(self, report_id: int):
+        return next((report for report in self.reports if report.get("id") == report_id), None)
+
+    async def delete_report(self, report_id: int):
+        initial_count = len(self.reports)
+        self.reports = [report for report in self.reports if report.get("id") != report_id]
+        if len(self.reports) < initial_count:
+            await self._save_reports()
+            return True
+        return False
+
+    async def update_report_status(self, report_id: int, new_status: str):
+        report = await self.get_report_by_id(report_id)
+        if report:
+            report["status"] = new_status
+            await self._save_reports()
+            return True
+        return False
+
+    async def get_filtered_and_sorted_reports(self, category_filter: str = "all", status_filter: str = "all", sort_by: str = "id_ascending"):
+        filtered_reports = self.reports
+
+        if category_filter != "all":
+            filtered_reports = [r for r in filtered_reports if r.get('category') and r['category'].lower() == category_filter.lower()]
+        
+        if status_filter != "all":
+            filtered_reports = [r for r in filtered_reports if r.get('status') and r['status'].lower() == status_filter.lower()]
+
+
+        if sort_by == "id_ascending":
+            filtered_reports.sort(key=lambda x: x.get('id', 0))
+        elif sort_by == "date_ascending":
+            filtered_reports.sort(key=lambda x: datetime.strptime(x.get('reportedAt', '1970-01-01'), "%Y-%m-%d"))
+        elif sort_by == "date_descending":
+            filtered_reports.sort(key=lambda x: datetime.strptime(x.get('reportedAt', '1970-01-01'), "%Y-%m-%d"), reverse=True)
+        elif sort_by == "severity_high":
+            severity_order = {"very high": 0, "high": 1, "medium": 2, "low": 3, "n/a": 4}
+            filtered_reports.sort(key=lambda x: severity_order.get(x.get('severity', 'n/a').lower(), 99))
+        elif sort_by == "severity_low":
+            severity_order = {"very high": 0, "high": 1, "medium": 2, "low": 3, "n/a": 4}
+            filtered_reports.sort(key=lambda x: severity_order.get(x.get('severity', 'n/a').lower(), 99), reverse=True)
+
+        return filtered_reports
+
+    
+
+# --- Modal for Bug Report Submission ---
+class BugReportModal(ui.Modal, title='🐞 Bug Report'):
+    def __init__(self, bot: commands.Bot, category: str = "N/A", severity: str = "N/A", manager: BugReportManager = None, original_reporter_id: str = None):
+        super().__init__()
+        self.bot = bot # Store the bot instance
+        self.category = category
+        self.severity = severity
+        self.manager = manager # Store the manager instance to save reports
+        self.original_reporter_id = original_reporter_id
+
+        # Define TextInput fields
+        self.bug_title = ui.TextInput(
+            label='Title:',
+            placeholder='Enter a concise title (e.g., "Wrong item in shop")',
+            max_length=100,
+            style=discord.TextStyle.short,
+            required=True
+        )
+        self.bug_description = ui.TextInput(
+            label='Describe The Bug:',
+            placeholder='Provide a detailed description of the bug...',
+            max_length=800, # Changed from 2000 to 800 
+            style=discord.TextStyle.paragraph,
+            required=True
+        )
+        self.steps_to_reproduce = ui.TextInput(
+            label='Describe Steps To Reproduce The Bug:',
+            placeholder='List steps to reliably reproduce the bug (e.g., "1. Go to...", "2. Click...", "3. Observe...")',
+            max_length=500, # Changed from 2000 to 500 
+            style=discord.TextStyle.paragraph,
+            required=True
+        )
+
+        # Add TextInput fields to the modal
+        self.add_item(self.bug_title)
+        self.add_item(self.bug_description)
+        self.add_item(self.steps_to_reproduce)
+
+    async def on_submit(self, interaction: Interaction):
+        """Handles the submission of the bug report modal."""
+        bug_report_channel_id = os.getenv("BUG_REPORT_CHANNEL_ID")
+
+        if not bug_report_channel_id:
+            print("Error: BUG_REPORT_CHANNEL_ID not set in environment variables.")
+            await interaction.response.send_message(
+                "🐛 An error occurred: Bug report channel not configured. Please contact an administrator.",
+                ephemeral=True
+            )
+            return
+
+        try:
+            report_channel = interaction.client.get_channel(int(bug_report_channel_id))
+            if not report_channel:
+                await interaction.response.send_message(
+                    "🐛 An error occurred: Could not find the configured bug report channel. Please contact an administrator.",
+                    ephemeral=True
+                )
+                print(f"Error: Could not find channel with ID {bug_report_channel_id}")
+                return
+
+            report_data = {
+                "title": self.bug_title.value,
+                "severity": self.severity,
+                "status": "pending", # Set status to pending on submission 
+                "category": self.category,
+                "reporterID": str(interaction.user.id),
+                "reportedAt": interaction.created_at.strftime("%Y-%m-%d"),
+                "description": self.bug_description.value,
+                "reproducesteps": self.steps_to_reproduce.value.replace('\n', '\\n'), 
+            }
+            if self.original_reporter_id: # Add original_reporter if provided 
+                report_data["original_reporter"] = self.original_reporter_id
+
+            report_id = await self.manager.add_report(report_data)
+            btdb = _get_db()["btdb"]
+            btdb.update_one(
+                {"id": str(interaction.user.id)},
+                {
+                    "$inc": {"pend_bug_reports": 1},
+                    "$setOnInsert": {
+                    "fixed_bug_reports": 0,
+                    "approved_bug_reports": 0,
+                    "declined_bug_reports": 0
+                }
+                },
+                upsert=True
+            )
+
+            # Create an embed to send to the Discord channel for administrators
+            embed = discord.Embed(
+                title=f"🚨 New Bug Report: {self.bug_title.value}",
+                color=discord.Color.red(),
+                timestamp=interaction.created_at
+            )
+            embed.set_author(
+                name=f"Reported by {interaction.user.display_name}",
+                icon_url=interaction.user.avatar.url if interaction.user.avatar else None
+            )
+            embed.add_field(name="Reporter", value=f"<@{interaction.user.id}> ({interaction.user.id})", inline=False)
+            if self.original_reporter_id:
+                embed.add_field(name="Original Reporter", value=f"{self.original_reporter_id}", inline=False)
+            embed.add_field(name="Category", value=self.category.capitalize(), inline=True)
+            embed.add_field(name="Severity", value=self.severity.capitalize(), inline=True)
+            embed.add_field(name="Status", value="`PENDING`", inline=True) # Display pending status 
+            embed.add_field(name="Description", value=self.bug_description.value, inline=False)
+            embed.add_field(name="Steps to Reproduce", value=self.steps_to_reproduce.value, inline=False)
+            embed.set_footer(text=f"Bug Report ID: {report_id}", icon_url=self.bot.user.avatar.url if self.bot.user.avatar else None)
+            
+            # Send with approval view 
+            view = BugReportApprovalView(self.bot, self.manager, report_id, report_data)
+            message = await report_channel.send(embed=embed, view=view)
+            view.message = message
+
+
+            # Confirm submission to the user
+            await interaction.response.send_message(
+                f"✅ Your bug report (ID: `{report_id}`) has been submitted! Thank you for helping us improve.",
+                ephemeral=True
+            )
+
+        except ValueError:
+            await interaction.response.send_message(
+                "🐛 An error occurred: Invalid BUG_REPORT_CHANNEL_ID. Please contact an administrator.",
+                ephemeral=True
+            )
+            print("Error: BUG_REPORT_CHANNEL_ID is not a valid integer.")
+        except Exception as e:
+            await interaction.response.send_message(
+                "🐛 An unexpected error occurred while submitting your bug report. Please try again later.",
+                ephemeral=True
+            )
+            print(f"An unexpected error occurred in BugReportModal on_submit: {e}")
+
+# --- View for Bug Report Approval/Decline ---
+class BugReportApprovalView(ui.View):
+    def __init__(self, bot: commands.Bot, manager: BugReportManager, report_id: int, report_data: dict):
+        super().__init__(timeout=None) # No timeout for persistence 
+        self.message = None
+        self.bot = bot
+        self.manager = manager
+        self.report_id = report_id
+        self.report_data = report_data
+
+    @ui.button(label="Approve", style=discord.ButtonStyle.green, custom_id="bug_approve")
+    async def approve_button(self, interaction: Interaction, button: ui.Button):
+        is_hardcoded_admin = get_admin_info(interaction.user.id)
+        member = interaction.guild.get_member(interaction.user.id)
+        if not member or not is_hardcoded_admin:
+            await interaction.response.send_message("❌ You don't have permission to use this button.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+
+        bug_approved_channel_id = os.getenv("BUG_APPROVED_CHANNEL_ID")
+        if not bug_approved_channel_id:
+            await interaction.followup.send("❌ Error: Bug approved channel not configured. Cannot approve.", ephemeral=True)
+            return
+
+        try:
+            approved_channel = self.bot.get_channel(int(bug_approved_channel_id))
+
+            eco = self.bot.get_cog("Economy")
+            original_value = self.report_data.get("original_reporter")
+            original_reporter_name_string = self.report_data.get("original_reporter")
+            reporter_discord_id = self.report_data.get("reporterID")
+            should_direct_approve = bool(original_reporter_name_string)
+            original_value = reporter_discord_id if should_direct_approve else None 
+
+            eco = self.bot.get_cog("Economy")
+            if should_direct_approve: 
+                original_id = int(original_value)
+                if eco:
+                    await eco._add_points_to_data(original_id, 1)
+                    original_user = await self.bot.fetch_user(original_id)
+
+                    reward_channel_id = os.getenv("BUG_POINT_REWARD_CHANNEL_ID")
+                    if reward_channel_id:
+                        reward_channel = self.bot.get_channel(int(reward_channel_id))
+                        if reward_channel:
+                            reward_embed = discord.Embed(
+                                title="🏆 Reward!",
+                                description=f"Gave **1** point to {original_user.mention} for reporting a bug.",
+                                color=discord.Color.gold(),
+                                timestamp=datetime.now(timezone.utc)
+                            )
+                            reward_embed.add_field(name="Bug Title", value=self.report_data.get("title", "N/A"), inline=False)
+                            reward_embed.add_field(name="Bug ID", value=str(self.report_id), inline=True)
+                            reward_embed.set_thumbnail(url=original_user.avatar.url if original_user.avatar else None)
+                            reward_embed.set_footer(
+                                text=f"Approved by {interaction.user.display_name}",
+                                icon_url=interaction.user.avatar.url if interaction.user.avatar else None
+                            )
+                            await reward_channel.send(embed=reward_embed)
+            else:
+                # Fallback: open PointSelectionView if original_reporter is invalid
+                point_selection_view = PointSelectionView(self.bot, self.manager, self.report_id, self.report_data, self.message)
+                await interaction.followup.send(
+                    embed=discord.Embed(
+                        title="🎁 Reward Points",
+                        description="Original reporter is not defined or invalid. Please manually select the user to reward:",
+                        color=discord.Color.blue()
+                    ),
+                    view=point_selection_view,
+                    ephemeral=True
+                )
+                return
+
+
+            await self.manager.update_report_status(self.report_id, "approved")
+            btdb = _get_db()["btdb"]
+            reporter_id_for_stats = self.report_data.get("reporterID") # Get reporterID
+            if reporter_id_for_stats and str(reporter_id_for_stats).isdigit(): # Check reporterID
+                btdb.update_one(
+                    {"id": str(reporter_id_for_stats)}, # Target reporterID for updates
+                    {
+                        "$inc": {
+                            "pend_bug_reports": -1,       # Decrement pending
+                            "approved_bug_reports": 1     # Increment approved
+                        }
+                    },
+                    upsert=True # Add upsert=True to ensure the entry exists for reporterID
+                )
+            approved_embed = self._create_approved_embed(interaction, "approved")
+            view = BugReportActionsView(self.bot, self.manager, self.report_id, self.report_data)
+            approved_message = await approved_channel.send(embed=approved_embed, view=view)
+            view.message = approved_message
+
+            if self.message:
+                await self.message.delete()
+
+            await interaction.followup.send(f"✅ Bug report `{self.report_id}` approved and 1 point given to the reporter.", ephemeral=True)
+            self.stop()
+
+        except Exception as e:
+            await interaction.followup.send(f"❌ An error occurred while approving the report: {e}", ephemeral=True)
+            print(f"Error in approve_button: {e}")
+
+
+    @ui.button(label="Decline", style=discord.ButtonStyle.red, custom_id="bug_decline")
+    async def decline_button(self, interaction: Interaction, button: ui.Button):
+        is_hardcoded_admin = get_admin_info(interaction.user.id)
+        member = interaction.guild.get_member(interaction.user.id)
+        if not member or not is_hardcoded_admin:
+            await interaction.response.send_message("❌ You don't have permission to use this button.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+
+        archive_channel_id = os.getenv("BUG_ARCHIVE_CHANNEL_ID")
+        if not archive_channel_id:
+            await interaction.followup.send(
+                "❌ Error: Bug archive channel not configured. Cannot archive.",
+                ephemeral=True
+            )
+            print("Error: BUG_ARCHIVE_CHANNEL_ID not set in environment variables.")
+            return
+
+        try:
+            archive_channel = self.bot.get_channel(int(archive_channel_id))
+            if not archive_channel:
+                await interaction.followup.send(
+                    "❌ Error: Could not find the configured bug archive channel. Cannot archive.",
+                    ephemeral=True
+                )
+                print(f"Error: Could not find archive channel with ID {archive_channel_id}")
+                return
+            
+            archive_embed = discord.Embed(
+                title=f"❌ DECLINED",
+                description=f"Bug Report #{self.report_id} has been declined by {interaction.user.display_name}.",
+                color=discord.Color.red(),
+                timestamp=interaction.created_at
+            )
+            archive_embed.add_field(name="Title", value=self.report_data.get('title', 'N/A'), inline=False)
+            archive_embed.add_field(name="Status", value="DECLINED", inline=False)
+            archive_embed.add_field(name="Category", value=self.report_data.get('category', 'N/A').capitalize(), inline=True)
+            archive_embed.add_field(name="Severity", value=self.report_data.get('severity', 'N/A').capitalize(), inline=True)
+            archive_embed.add_field(name="Reporter", value=f"<@{self.report_data.get('reporterID', 'N/A')}>", inline=True)
+            if self.report_data.get("original_reporter"):
+                archive_embed.add_field(name="Original Reporter", value=f"{self.report_data.get('original_reporter')}", inline=True)
+            archive_embed.add_field(name="Reported At", value=self.report_data.get('reportedAt', 'N/A'), inline=True)
+            archive_embed.add_field(name="Description", value=self.report_data.get('description', 'N/A'), inline=False)
+            reproduce_steps_display = self.report_data.get('reproducesteps', 'N/A').replace('\\n', '\n')
+            archive_embed.add_field(name="Steps to Reproduce", value=reproduce_steps_display, inline=False)
+            archive_embed.set_footer(
+                text=f"Declined by: {interaction.user.display_name} - Bug Report ID: {self.report_id}",
+                icon_url=interaction.user.avatar.url if interaction.user.avatar else None
+            )
+            await archive_channel.send(embed=archive_embed)
+            
+            # Delete the report from the database and original message 
+            await self.manager.delete_report(self.report_id)
+            btdb = _get_db()["btdb"]
+            user_id = self.report_data.get("reporterID")
+            if user_id and str(user_id).isdigit():
+                btdb.update_one(
+                    {"id": str(user_id)},
+                    {
+                        "$inc": {
+                            "pend_bug_reports": -1,
+                            "declined_bug_reports": 1
+                        }
+                    },
+                    upsert=True
+                )
+            if self.message:
+                await self.message.delete()
+
+            await interaction.followup.send(f"❌ Bug report `{self.report_id}` marked as declined and archived.", ephemeral=True)
+            self.stop() # Stop the view
+        except Exception as e:
+            await interaction.followup.send(f"❌ An error occurred while marking report as declined: {e}", ephemeral=True)
+
+    def _create_approved_embed(self, interaction: Interaction, status: str):
+        embed = discord.Embed(
+            title=f"✅ Approved Bug Report: {self.report_data['title']}",
+            color=discord.Color.green(),
+            timestamp=interaction.created_at
+        )
+        embed.set_author(
+            name=f"Reported by {self.report_data['reporterID']}",
+            icon_url=interaction.user.avatar.url if interaction.user.avatar else None
+        )
+        embed.add_field(name="Reporter", value=f"<@{self.report_data['reporterID']}> ({self.report_data['reporterID']})", inline=False)
+        if self.report_data.get("original_reporter"):
+            embed.add_field(name="Original Reporter", value=f"{self.report_data['original_reporter']}", inline=False)
+        embed.add_field(name="Category", value=self.report_data['category'].capitalize(), inline=True)
+        embed.add_field(name="Severity", value=self.report_data['severity'].capitalize(), inline=True)
+        embed.add_field(name="Status", value=f"`{status.upper()}`", inline=True)
+        embed.add_field(name="Description", value=self.report_data['description'], inline=False)
+        embed.add_field(name="Steps to Reproduce", value=self.report_data['reproducesteps'].replace('\\n', '\n'), inline=False)
+        embed.set_footer(text=f"Bug Report ID: {self.report_id}", icon_url=self.bot.user.avatar.url if self.bot.user.avatar else None)
+        return embed
+
+# --- View for Point Selection (for unassigned original_reporter) ---
+class PointSelectionView(ui.View):
+    def __init__(self, bot: commands.Bot, manager: BugReportManager, report_id: int, report_data: dict, original_message: discord.Message):
+        super().__init__(timeout=180) # Timeout after 3 minutes for point selection
+        self.bot = bot
+        self.manager = manager
+        self.report_id = report_id
+        self.report_data = report_data
+        self.original_message = original_message # Store original message to delete it
+
+        for i in range(1, 6): # Buttons for 1 to 5 points
+            button = ui.Button(label=f"{i} Points", style=discord.ButtonStyle.blurple, custom_id=f"points_{i}")
+            button.callback = lambda interaction, points=i: self._give_points_and_finalize(interaction, points)
+            self.add_item(button)
+
+    async def interaction_check(self, interaction: Interaction) -> bool:
+        # This check needs to be more robust. It should ensure only the person
+        # who initiated the ephemeral message can click.
+        # For now, if the interaction.message (the ephemeral message) is set,
+        # we can assume it's valid, as it's sent ephemeral to the approver.
+        # If you need to restrict it further, you would store the approver's ID in __init__
+        # and check interaction.user.id against it here.
+        return True # Allows all interactions for now. Consider more restrictive logic if needed.
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        # Since this view is ephemeral, directly editing the message might not be necessary
+        # as it will disappear for the user on timeout anyway.
+        # If this view were sent publicly, this would be crucial.
+        # For now, leaving the original message edit check as a safety net.
+        if self.message: # Assuming self.message would be set if it was a persistent/non-ephemeral view
+            await self.message.edit(view=self)
+
+
+    async def _give_points_and_finalize(self, interaction: Interaction, points: int):
+        await interaction.response.defer(ephemeral=True)
+
+        reporter_id = int(self.report_data["reporterID"])
+        eco = self.bot.get_cog("Economy")
+        if eco:
+            await eco._add_points_to_data(reporter_id, points)
+            reporter_user = await self.bot.fetch_user(reporter_id)
+
+            reward_channel_id = os.getenv("BUG_POINT_REWARD_CHANNEL_ID")
+            if reward_channel_id:
+                try:
+                    reward_channel = self.bot.get_channel(int(reward_channel_id))
+                    if reward_channel:
+                        reward_embed = discord.Embed(
+                            title="🏆 Reward!",
+                            description=f"Gave **{points}** points to {reporter_user.mention} for reporting a bug.",
+                            color=discord.Color.gold(),
+                            timestamp=datetime.now(timezone.utc)
+                        )
+                        reward_embed.add_field(name="Bug Title", value=self.report_data.get("title", "N/A"), inline=False)
+                        reward_embed.add_field(name="Bug ID", value=str(self.report_id), inline=True)
+                        reward_embed.set_thumbnail(url=reporter_user.avatar.url if reporter_user.avatar else None)
+                        reward_embed.set_footer(
+                            text=f"Approved by {interaction.user.display_name}",
+                            icon_url=interaction.user.avatar.url if interaction.user.avatar else None
+                        )
+                        await reward_channel.send(embed=reward_embed)
+                except Exception as e:
+                    print(f"Error sending reward embed: {e}")
+        else:
+            print("Warning: Economy cog not found. Cannot add points.")
+
+        await self.manager.update_report_status(self.report_id, "approved")
+        btdb = _get_db()["btdb"]
+        user_id_for_stats = self.report_data.get("reporterID") # Get reporterID from report_data
+        if user_id_for_stats and str(user_id_for_stats).isdigit():
+            btdb.update_one(
+                {"id": str(user_id_for_stats)}, # <-- EXPLICITLY CAST TO STRING HERE
+                {
+                    "$inc": {
+                        "pend_bug_reports": -1,       # Decrement pending
+                        "approved_bug_reports": 1     # Increment approved
+                    }
+                },
+                upsert=True # Add upsert=True to ensure the entry exists for reporterID
+            )
+        
+        # Send to approved channel
+        bug_approved_channel_id = os.getenv("BUG_APPROVED_CHANNEL_ID")
+        if bug_approved_channel_id:
+            approved_channel = self.bot.get_channel(int(bug_approved_channel_id))
+            if approved_channel:
+                approved_embed = self._create_approved_embed(interaction, "approved")
+                view = BugReportActionsView(self.bot, self.manager, self.report_id, self.report_data)
+                approved_message = await approved_channel.send(embed=approved_embed, view=view)
+                view.message = approved_message
+
+        if self.original_message: # Delete original message from BUG_REPORT_CHANNEL_ID
+            await self.original_message.delete()
+        
+        await interaction.followup.send(f"✅ Bug report `{self.report_id}` approved and {points} points given to reporter.", ephemeral=True)
+        self.stop() # Stop this view after action
+
+    def _create_approved_embed(self, interaction: Interaction, status: str):
+        embed = discord.Embed(
+            title=f"✅ Approved Bug Report: {self.report_data['title']}",
+            color=discord.Color.green(),
+            timestamp=interaction.created_at
+        )
+        embed.set_author(
+            name=f"Reported by {self.report_data['reporterID']}",
+            icon_url=interaction.user.avatar.url if interaction.user.avatar else None
+        )
+        embed.add_field(name="Reporter", value=f"<@{self.report_data['reporterID']}> ({self.report_data['reporterID']})", inline=False)
+        if self.report_data.get("original_reporter"):
+            embed.add_field(name="Original Reporter", value=f"{self.report_data['original_reporter']}", inline=False)
+        embed.add_field(name="Category", value=self.report_data['category'].capitalize(), inline=True)
+        embed.add_field(name="Severity", value=self.report_data['severity'].capitalize(), inline=True)
+        embed.add_field(name="Status", value=f"`{status.upper()}`", inline=True)
+        embed.add_field(name="Description", value=self.report_data['description'], inline=False)
+        embed.add_field(name="Steps to Reproduce", value=self.report_data['reproducesteps'].replace('\\n', '\n'), inline=False)
+        embed.set_footer(text=f"Bug Report ID: {self.report_id}", icon_url=self.bot.user.avatar.url if self.bot.user.avatar else None)
+        return embed
+
+# --- View for Bug Report Actions (Fixed/Decline) ---
+class BugReportActionsView(ui.View):
+    def __init__(self, bot: commands.Bot, manager: BugReportManager, report_id: int, report_data: dict):
+        super().__init__(timeout=None) # Timeout is None for persistence 
+        self.message = None
+        self.bot = bot
+        self.manager = manager
+        self.report_id = report_id
+        self.report_data = report_data # Store the full report data
+
+    async def on_timeout(self):
+        # Disable buttons when the view times out
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            await self.message.edit(view=self)
+
+    @ui.button(label="Fixed", style=discord.ButtonStyle.green, custom_id="bug_fixed")
+    async def fixed_button(self, interaction: Interaction, button: ui.Button):
+        is_hardcoded_admin = get_admin_info(interaction.user.id)
+        member = interaction.guild.get_member(interaction.user.id)
+        if not member or not is_hardcoded_admin:
+            await interaction.response.send_message("❌ You don't have permission to use this button.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+
+        archive_channel_id = os.getenv("BUG_ARCHIVE_CHANNEL_ID")
+        if not archive_channel_id:
+            await interaction.followup.send(
+                "❌ Error: Bug archive channel not configured. Cannot archive.",
+                ephemeral=True
+            )
+            print("Error: BUG_ARCHIVE_CHANNEL_ID not set in environment variables.")
+            return
+
+        try:
+            archive_channel = self.bot.get_channel(int(archive_channel_id))
+            if not archive_channel:
+                await interaction.followup.send(
+                    "❌ Error: Could not find the configured bug archive channel. Cannot archive.",
+                    ephemeral=True
+                )
+                print(f"Error: Could not find archive channel with ID {archive_channel_id}")
+                return
+            
+            archive_embed = discord.Embed(
+                title=f"✅ FIXED",
+                color=discord.Color.green(), # Green color for fixed
+                timestamp=interaction.created_at
+            )
+            archive_embed.add_field(name="Title", value=self.report_data.get('title', 'N/A'), inline=False)
+            archive_embed.add_field(name="Status", value="FIXED", inline=False)
+            archive_embed.add_field(name="Category", value=self.report_data.get('category', 'N/A').capitalize(), inline=True)
+            archive_embed.add_field(name="Severity", value=self.report_data.get('severity', 'N/A').capitalize(), inline=True)
+            archive_embed.add_field(name="Reporter", value=f"<@{self.report_data.get('reporterID', 'N/A')}>", inline=True)
+            if self.report_data.get("original_reporter"):
+                archive_embed.add_field(name="Original Reporter", value=f"{self.report_data.get('original_reporter')}", inline=True)
+            archive_embed.add_field(name="Reported At", value=self.report_data.get('reportedAt', 'N/A'), inline=True)
+            archive_embed.add_field(name="Description", value=self.report_data.get('description', 'N/A'), inline=False)
+            reproduce_steps_display = self.report_data.get('reproducesteps', 'N/A').replace('\\n', '\n')
+            archive_embed.add_field(name="Steps to Reproduce", value=reproduce_steps_display, inline=False)
+            # Add "Fixed by" to the footer with the fixer's logo
+            archive_embed.set_footer(
+                text=f"Fixed by: {interaction.user.display_name} - Bug Report ID: {self.report_id}",
+                icon_url=interaction.user.avatar.url if interaction.user.avatar else None # Use fixer's avatar
+            )
+            await archive_channel.send(embed=archive_embed)
+
+            # Delete the report after it's fixed and processed
+            await self.manager.delete_report(self.report_id)
+            btdb = _get_db()["btdb"]
+            reporter_id_for_stats = self.report_data.get("reporterID") # Get reporterID
+            if reporter_id_for_stats and str(reporter_id_for_stats).isdigit(): # Check reporterID
+                btdb.update_one(
+                    {"id": str(reporter_id_for_stats)}, # Target reporterID for updates
+                    {
+                        "$inc": {
+                            "approved_bug_reports": -1, # Decrement approved
+                            "fixed_bug_reports": 1      # Increment fixed
+                        }
+                    },
+                    upsert=True # Add upsert=True to ensure the entry exists for reporterID
+                )
+
+            if self.message: # Delete message from BUG_APPROVED_CHANNEL_ID 
+                await self.message.delete()
+
+            await interaction.followup.send(f"✅ Bug report `{self.report_id}` marked as fixed and archived.", ephemeral=True)
+            self.stop() # Stop the view
+        except Exception as e:
+            await interaction.followup.send(f"❌ An error occurred while marking report as fixed: {e}", ephemeral=True)
+
+
+    @ui.button(label="Declined", style=discord.ButtonStyle.red, custom_id="bug_declined")
+    async def declined_button(self, interaction: Interaction, button: ui.Button):
+        is_hardcoded_admin = get_admin_info(interaction.user.id)
+        member = interaction.guild.get_member(interaction.user.id)
+        if not member or not is_hardcoded_admin:
+            await interaction.response.send_message("❌ You don't have permission to use this button.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+
+        # Create an embed for the archive channel for declined reports
+        archive_channel_id = os.getenv("BUG_ARCHIVE_CHANNEL_ID")
+        if not archive_channel_id:
+            await interaction.followup.send(
+                "❌ Error: Bug archive channel not configured. Cannot archive.",
+                ephemeral=True
+            )
+            print("Error: BUG_ARCHIVE_CHANNEL_ID not set in environment variables.")
+            return
+
+        try:
+            archive_channel = self.bot.get_channel(int(archive_channel_id))
+            if not archive_channel:
+                await interaction.followup.send(
+                    "❌ Error: Could not find the configured bug archive channel. Cannot archive.",
+                    ephemeral=True
+                )
+                print(f"Error: Could not find archive channel with ID {archive_channel_id}")
+                return
+            
+            archive_embed = discord.Embed(
+                title=f"❌ DECLINED",
+                description=f"Bug Report #{self.report_id} has been declined by {interaction.user.display_name}.",
+                color=discord.Color.red(), # Red color for declined
+                timestamp=interaction.created_at
+            )
+            archive_embed.add_field(name="Title", value=self.report_data.get('title', 'N/A'), inline=False)
+            archive_embed.add_field(name="Status", value="DECLINED", inline=False)
+            archive_embed.add_field(name="Category", value=self.report_data.get('category', 'N/A').capitalize(), inline=True)
+            archive_embed.add_field(name="Severity", value=self.report_data.get('severity', 'N/A').capitalize(), inline=True)
+            archive_embed.add_field(name="Reporter", value=f"<@{self.report_data.get('reporterID', 'N/A')}>", inline=True)
+            if self.report_data.get("original_reporter"):
+                archive_embed.add_field(name="Original Reporter", value=f"{self.report_data.get('original_reporter')}", inline=True)
+            archive_embed.add_field(name="Reported At", value=self.report_data.get('reportedAt', 'N/A'), inline=True)
+            archive_embed.add_field(name="Description", value=self.report_data.get('description', 'N/A'), inline=False)
+            reproduce_steps_display = self.report_data.get('reproducesteps', 'N/A').replace('\\n', '\n')
+            archive_embed.add_field(name="Steps to Reproduce", value=reproduce_steps_display, inline=False)
+            archive_embed.set_footer(
+                text=f"Declined by: {interaction.user.display_name} - Bug Report ID: {self.report_id}",
+                icon_url=interaction.user.avatar.url if interaction.user.avatar else None
+            )
+            await archive_channel.send(embed=archive_embed)
+            
+            await self.manager.delete_report(self.report_id)
+            btdb = _get_db()["btdb"]
+            user_id = self.report_data.get("reporterID")
+
+            if user_id and str(user_id).isdigit():
+                btdb.update_one(
+                    {"id": str(user_id)},
+                    {
+                        "$inc": {
+                            "approved_bug_reports": -1,
+                            "declined_bug_reports": 1
+                        }
+                    },
+                    upsert=True
+                )
+
+
+            if self.message: # Delete message from BUG_APPROVED_CHANNEL_ID 
+                await self.message.delete()
+
+            await interaction.followup.send(f"❌ Bug report `{self.report_id}` marked as declined and archived.", ephemeral=True)
+            self.stop() # Stop the view
+        except Exception as e:
+            await interaction.followup.send(f"❌ An error occurred while marking report as declined: {e}", ephemeral=True)
+
+
+# --- Command Cog ---
+class bugreports(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+        self.bug_report_manager = BugReportManager(bot)
+
+    async def setup_hook(self) -> None: # For persistent views 
+        self.bot.add_view(BugReportApprovalView(self.bot, self.bug_report_manager, 0, {}))
+        self.bot.add_view(BugReportActionsView(self.bot, self.bug_report_manager, 0, {}))
+        self.bot.add_view(PointSelectionView(self.bot, self.bug_report_manager, 0, {}, None)) # Add the PointSelectionView as well
+
+    @app_commands.command(
+        name="submitbug",
+        description="Submit a bug report for review."
+    )
+    @app_commands.describe(
+        severity="How severe is this bug?",
+        category="What part of the bot does this bug affect?",
+        original_reporter="Optional: The original reporter of the bug if different from you." # Optional original_reporter 
+    )
+    @app_commands.choices(
+        severity=[
+            app_commands.Choice(name="Low", value="low"),
+            app_commands.Choice(name="Medium", value="medium"),
+            app_commands.Choice(name="High", value="high"),
+            app_commands.Choice(name="Very High", value="very high")
+        ],
+        category=[
+            app_commands.Choice(name="Mining", value="mining"),
+            app_commands.Choice(name="Foraging", value="foraging"),
+            app_commands.Choice(name="Dungeons", value="dungeons"),
+            app_commands.Choice(name="Slayers", value="slayers"),
+            app_commands.Choice(name="Island", value="island"),
+            app_commands.Choice(name="Fishing", value="fishing"),
+            app_commands.Choice(name="Others", value="others"),
+        ]
+    )
+    async def submit_bug(self, interaction: Interaction, severity: str, category: str, original_reporter: Optional[str] = None):
+        """Allows users to submit a bug report via a modal."""
+        # Pass the bot and manager instances to the modal, and original_reporter_id 
+        await interaction.response.send_modal(BugReportModal(self.bot, category, severity, self.bug_report_manager, original_reporter))
+
+
+    @app_commands.command(name="buglist", description="Shows all pending bug reports with pagination and sorting (Admin only).")
+    async def bug_list(self, interaction: Interaction):
+        await interaction.response.defer(ephemeral=True)
+        self.bug_report_manager.reports = await self.bug_report_manager._load_reports()
+        view = BugListPaginationView(self.bot, self.bug_report_manager, interaction.user)
+        await view.initialize_and_send(interaction)
+
+
+class BugListPaginationView(ui.View):
+    def __init__(self, bot: commands.Bot, manager, author: discord.User):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.manager = manager
+        self.author = author
+        self.current_page = 0
+        self.reports_per_page = 4
+        self.current_category_filter = "all"
+        self.current_status_filter = "all" # New status filter 
+        self.current_sort_by = "id_ascending"
+
+        self.category_options = [
+            discord.SelectOption(label="All Categories", value="all"),
+            discord.SelectOption(label="Mining", value="mining"),
+            discord.SelectOption(label="Foraging", value="foraging"),
+            discord.SelectOption(label="Dungeons", value="dungeons"),
+            discord.SelectOption(label="Slayers", value="slayers"),
+            discord.SelectOption(label="Island", value="island"),
+            discord.SelectOption(label="Fishing", value="fishing"),
+            discord.SelectOption(label="Others", value="others"),
+        ]
+
+        self.status_options = [ # New status options 
+            discord.SelectOption(label="Pending", value="pending"),
+            discord.SelectOption(label="Approved", value="approved"),
+        ]
+
+        self.sort_options = [
+            discord.SelectOption(label="Sort by ID (Ascending)", value="id_ascending"),
+            discord.SelectOption(label="Sort by Date (Ascending)", value="date_ascending"),
+            discord.SelectOption(label="Sort by Date (Descending)", value="date_descending"),
+            discord.SelectOption(label="Sort by Severity (High to Low)", value="severity_high"),
+            discord.SelectOption(label="Sort by Severity (Low to High)", value="severity_low"),
+        ]
+
+        # Initialize reports and total_pages
+        self.reports = []  # ← temporary until loaded async
+        self.total_pages = 1
+
+        self._add_navigation_buttons()  # Add buttons initially
+        self._refresh_select_menu()     # Add the select menu initially
+
+    def _add_navigation_buttons(self):
+        # Remove existing navigation buttons before adding them to avoid duplicates
+        # We must make a copy of self.children as we are modifying it during iteration.
+        for item in list(self.children): 
+            if isinstance(item, discord.ui.Button) and item.label in ["«", "◀", "▶", "»"]:
+                self.remove_item(item)
+
+        # Define and add new button instances with their callbacks
+        first = discord.ui.Button(label="«", style=discord.ButtonStyle.blurple, row=1)
+        first.callback = self.first_page_button_callback
+        self.add_item(first)
+
+        prev = discord.ui.Button(label="◀", style=discord.ButtonStyle.blurple, row=1)
+        prev.callback = self.previous_button_callback
+        self.add_item(prev)
+
+        next_btn = discord.ui.Button(label="▶", style=discord.ButtonStyle.blurple, row=1)
+        next_btn.callback = self.next_button_callback
+        self.add_item(next_btn)
+
+        last = discord.ui.Button(label="»", style=discord.ButtonStyle.blurple, row=1)
+        last.callback = self.last_page_button_callback
+        self.add_item(last)
+
+    class SortSelect(ui.Select):
+        def __init__(self, parent_view):
+            # Combine category, status, and sort options for the dropdown 
+            options = []
+            for opt in parent_view.category_options:
+                options.append(discord.SelectOption(label=opt.label, value=opt.value, default=opt.default))
+            options.append(discord.SelectOption(label="--- Status ---", value="divider_status"))
+            for opt in parent_view.status_options:
+                options.append(discord.SelectOption(label=opt.label, value=f"status_{opt.value}", default=opt.default))
+            options.append(discord.SelectOption(label="--- Sort By ---", value="divider_sort"))
+            for opt in parent_view.sort_options:
+                options.append(discord.SelectOption(label=opt.label, value=f"sort_{opt.value}", default=opt.default))
+
+
+            current_category = parent_view.current_category_filter.capitalize() if parent_view.current_category_filter != "all" else "All"
+            current_status = parent_view.current_status_filter.capitalize() if parent_view.current_status_filter != "all" else "All"
+            current_sort = parent_view.current_sort_by.replace("_", " ").title()
+
+            placeholder = f"Category: {current_category} | Status: {current_status} | Sort: {current_sort}"
+            super().__init__(placeholder=placeholder, options=options, row=0)
+            self.parent_view = parent_view
+
+        async def callback(self, interaction: Interaction):
+            if interaction.user.id != self.parent_view.author.id:
+                await interaction.response.send_message("You are not the requester of this interaction.", ephemeral=True)
+                return
+
+            selected_value = self.values[0]
+            
+            # Reset default for all options
+            for option in self.options:
+                option.default = False
+
+            # Set default for the selected option
+            for opt in self.options:
+                if opt.value == selected_value:
+                    opt.default = True
+                    # Also update the actual filter values
+                    if selected_value in [o.value for o in self.parent_view.category_options]:
+                        self.parent_view.current_category_filter = selected_value
+                    elif selected_value.startswith("status_"):
+                        self.parent_view.current_status_filter = selected_value.replace("status_", "")
+                    elif selected_value.startswith("sort_"):
+                        self.parent_view.current_sort_by = selected_value.replace("sort_", "")
+                    break
+
+            if selected_value in [opt.value for opt in self.parent_view.category_options]:
+                self.parent_view.current_category_filter = selected_value
+            elif selected_value.startswith("status_"):
+                self.parent_view.current_status_filter = selected_value.replace("status_", "")
+            elif selected_value.startswith("sort_"):
+                self.parent_view.current_sort_by = selected_value.replace("sort_", "")
+
+            # Re-filter and re-sort reports 
+            self.parent_view.reports = await self.parent_view.manager.get_filtered_and_sorted_reports(
+                self.parent_view.current_category_filter,
+                self.parent_view.current_status_filter,
+                self.parent_view.current_sort_by
+            )
+            self.parent_view.current_page = 0
+            self.parent_view.total_pages = max(1, (len(self.parent_view.reports) + self.parent_view.reports_per_page - 1) // self.parent_view.reports_per_page)
+            
+            self.parent_view._refresh_select_menu() # Re-add select menu with updated default
+            await self.parent_view._send_current_page(interaction)
+
+
+    def _refresh_select_menu(self):
+        # Remove existing select menu before adding a new one
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Select):
+                self.remove_item(item)
+        self.add_item(self.SortSelect(self))
+
+
+    async def initialize_and_send(self, interaction: Interaction):
+        # Always re-fetch reports and calculate total_pages before initial send
+        self.reports = await self.manager.get_filtered_and_sorted_reports(
+            self.current_category_filter,
+            self.current_status_filter, # Pass status filter 
+            self.current_sort_by
+        )
+        self.total_pages = max(1, (len(self.reports) + self.reports_per_page - 1) // self.reports_per_page)
+        self.current_page = 0 # Ensure we always start on the first page
+
+        self._add_navigation_buttons()  # Re-add navigation buttons to ensure their presence and correct callbacks
+        self._refresh_select_menu()     # Re-add the select menu with updated defaults
+        self._update_buttons()          # Update button states based on current_page and total_pages
+
+        embed = self._create_bug_list_embed()
+        self.message = await interaction.followup.send(
+            embed=embed,
+            view=self,
+            ephemeral=True
+        )
+
+    async def _send_current_page(self, interaction: Interaction):
+        # Always re-fetch reports and calculate total_pages before sending updated page
+        self.reports = await self.manager.get_filtered_and_sorted_reports(
+            self.current_category_filter, 
+            self.current_status_filter, # Pass status filter 
+            self.current_sort_by
+        )
+        self.total_pages = max(1, (len(self.reports) + self.reports_per_page - 1) // self.reports_per_page)
+        
+        self._add_navigation_buttons() # Re-add buttons on every page change
+        self._update_buttons()         # Update button states after page change
+        embed = self._create_bug_list_embed()
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    def _update_buttons(self):
+        # Re-find buttons by their labels or custom_ids to ensure robustness
+        first_button = next((item for item in self.children if isinstance(item, discord.ui.Button) and item.label == "«"), None)
+        previous_button = next((item for item in self.children if isinstance(item, discord.ui.Button) and item.label == "◀"), None)
+        next_button = next((item for item in self.children if isinstance(item, discord.ui.Button) and item.label == "▶"), None)
+        last_button = next((item for item in self.children if isinstance(item, discord.ui.Button) and item.label == "»"), None)
+
+        if first_button:
+            first_button.disabled = (self.current_page == 0)
+        if previous_button:
+            previous_button.disabled = (self.current_page == 0)
+        if next_button:
+            next_button.disabled = (self.current_page >= self.total_pages - 1)
+        if last_button:
+            last_button.disabled = (self.current_page >= self.total_pages - 1)
+
+    async def first_page_button_callback(self, interaction: Interaction):
+        if interaction.user.id != self.author.id:
+            await interaction.response.send_message("You are not the requester of this interaction.", ephemeral=True)
+            return
+        self.current_page = 0
+        await self._send_current_page(interaction)
+
+    async def previous_button_callback(self, interaction: Interaction):
+        if interaction.user.id != self.author.id:
+            await interaction.response.send_message("You are not the requester of this interaction.", ephemeral=True)
+            return
+        self.current_page = max(0, self.current_page - 1)
+        await self._send_current_page(interaction)
+
+    async def next_button_callback(self, interaction: Interaction):
+        if interaction.user.id != self.author.id:
+            await interaction.response.send_message("You are not the requester of this interaction.", ephemeral=True)
+            return
+        self.current_page = min(self.total_pages - 1, self.current_page + 1)
+        await self._send_current_page(interaction)
+
+    async def last_page_button_callback(self, interaction: Interaction):
+        if interaction.user.id != self.author.id:
+            await interaction.response.send_message("You are not the requester of this interaction.", ephemeral=True)
+            return
+        self.current_page = self.total_pages - 1
+        await self._send_current_page(interaction)
+
+    def _create_bug_list_embed(self):
+        start_index = self.current_page * self.reports_per_page
+        end_index = start_index + self.reports_per_page
+        page_reports = self.reports[start_index:end_index]
+
+        embed = discord.Embed(
+            title="🐞 Bug Reports",
+            description=f"Page {self.current_page + 1}/{self.total_pages}",
+            color=discord.Color.blue()
+        )
+
+        if not page_reports:
+            embed.description += "\nNo reports available for the current filter/sort criteria."
+        else:
+            for report in page_reports:
+                embed.add_field(
+                    name=f"#{report['id']} - {report['title']}",
+                    value=(
+                        f"**Status:** {report.get('status', 'N/A').capitalize()}\n" # Display status 
+                        f"**Severity:** {report['severity'].capitalize()}\n"
+                        f"**Category:** {report['category'].capitalize()}\n"
+                        f"**Bug ID:** {report['id']}\n"
+                        f"**Reporter:** <@{report['reporterID']}>\n"
+                        f"**Reported At:** {report['reportedAt']}\n"
+                        f"**Description:** {report['description'][:200]}{'...' if len(report['description']) > 200 else ''}"
+
+                    ),
+                    inline=False
+                )
+        return embed
+
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if hasattr(self, 'message'):
+            await self.message.edit(view=self)
+
+async def setup(bot):
+    await bot.add_cog(bugreports(bot))
