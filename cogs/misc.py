@@ -293,7 +293,7 @@ class misc(commands.Cog):
                           color=discord.Color.orange())
             await channel.send(embed=embed)
 
-    @tasks.loop(seconds=5)
+    @tasks.loop(seconds=20)
     async def bt_listener(self):
         guild = discord.utils.get(self.bot.guilds)
         if not guild:
