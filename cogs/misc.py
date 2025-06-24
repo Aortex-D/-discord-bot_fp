@@ -47,13 +47,12 @@ EMBED_CONTENTS = {
         "title": "👋 Welcome to Beta Testers Server!",
         "color": discord.Color.orange(),
         "description": (
-                        "Congratulations on becoming a Beta Tester for Fakepixel! As part of the testing team, your task is to help identify bugs, verify reports, and contribute to improving the server. Your participation will support the development process as we work towards creating a stable and polished gameplay experience.\n"
+                        "Congratulations on becoming a Beta Tester for Fakepixel! As part of the testing team, your task is to help identify bugs, verify reports, and contribute to improving the server. Your participation will support the development process of the server!\n"
                         "\n"
                         "**🛠 What’s your role here?**\n"
                         "- Report bugs using the /submitbug command whenever you discover an issue.\n"
                         "- Verify bug reports by regularly checking the forum’s bug report section. Review those reports, mark them as verified or unverified, and ensure they are logged properly on behalf of the original reporters.\n"
-                        "- Stay active — your activity is monitored to ensure a helpful tester community.\n"
-                        "- Earn rewards for every valid bug report or verified forum report. Points can be redeemed for rewards in the shop.\n"
+                        "- Earn points for every valid bug report or verified forum bug report. Points can be redeemed for rewards in the shop.\n"
                         "- Inactivity may lead to removal of your tester role.\n"
                         "\n"
                         "**❓ Didn’t receive your roles yet?**\n"
@@ -61,7 +60,7 @@ EMBED_CONTENTS = {
                         "- 🔹 After your application is approved, the administrator who sent you this server’s invite will mark you as verified in our database.\n"
                         "- 🔹 If you believe there’s a delay, please reach out to the administrator who invited you for verification assistance.\n"
                         "\n"
-                        "⚡ Let’s work together to make Fakepixel Skyblock the best experience possible!"
+                        "⚡ We are looking forward for your valuable contributions to the continued improvement of Fakepixel!"
         ),
         "image_url": None
     }
