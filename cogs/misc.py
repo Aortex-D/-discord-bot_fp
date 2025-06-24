@@ -293,7 +293,7 @@ class misc(commands.Cog):
                           color=discord.Color.orange())
             await channel.send(embed=embed)
 
-    @tasks.loop(seconds=20)
+    @tasks.loop(seconds=5)
     async def bt_listener(self):
         guild = discord.utils.get(self.bot.guilds)
         if not guild:
@@ -318,7 +318,7 @@ class misc(commands.Cog):
             if member is None:
                 try:
                     member = await guild.fetch_member(int(user_id))
-                    await asyncio.sleep(1.2)  # Sleep after API hit
+                    await asyncio.sleep(1)  # Sleep after API hit
                 except discord.HTTPException as e:
                     continue
 
@@ -356,7 +356,7 @@ class misc(commands.Cog):
                 print(f"[WARN] Missing permissions to modify {user_id}")
                 continue
 
-            await asyncio.sleep(1.5)  # Space out actions to reduce risk of rate limit
+            await asyncio.sleep(1)  # Space out actions to reduce risk of rate limit
 
         if updated:
             try:
