@@ -312,10 +312,12 @@ class misc(commands.Cog):
         new_data = data.copy()
 
         for user_id, info in data.items():
-            try:
-                member = await guild.fetch_member(int(user_id))
-            except:
-                continue
+            member = guild.get_member(int(user_id))
+            if member is None:
+                try:
+                    member = await guild.fetch_member(int(user_id))
+                except:
+                    continue
 
             status = info.get("status")
 
