@@ -47,12 +47,12 @@ EMBED_CONTENTS = {
         "title": "👋 Welcome to Beta Testers Server!",
         "color": discord.Color.orange(),
         "description": (
-                        "Congratulations on becoming a Beta Tester for Fakepixel! As part of the testing team, your task is to help identify bugs, verify reports, and contribute to improving the server. Your participation will support the development process of the server!\n"
+                        "Congratulations on becoming a Beta Tester for Fakepixel! As part of the testing team, your task is to help identify bugs, verify reports, and contribute to improving the server. Your participation will support the development process as we work towards creating a stable and polished gameplay experience.\n"
                         "\n"
                         "**🛠 What’s your role here?**\n"
                         "- Report bugs using the /submitbug command whenever you discover an issue.\n"
                         "- Verify bug reports by regularly checking the forum’s bug report section. Review those reports, mark them as verified or unverified, and ensure they are logged properly on behalf of the original reporters.\n"
-                        "- Earn points for every valid bug report or verified forum bug report. Points can be redeemed for rewards in the shop.\n"
+                        "- Earn points for every valid bug report or verified forum report. Points can be redeemed for rewards in the shop.\n"
                         "- Inactivity may lead to removal of your tester role.\n"
                         "\n"
                         "**❓ Didn’t receive your roles yet?**\n"
@@ -60,8 +60,7 @@ EMBED_CONTENTS = {
                         "- 🔹 After your application is approved, the administrator who sent you this server’s invite will mark you as verified in our database.\n"
                         "- 🔹 If you believe there’s a delay, please reach out to the administrator who invited you for verification assistance.\n"
                         "\n"
-                        "⚡ We are looking forward for your valuable contributions to the continued improvement of Fakepixel!"
-        ),
+                        "⚡ Let’s work together to make Fakepixel Skyblock the best experience possible!"),
         "image_url": None
     }
 }
@@ -178,8 +177,10 @@ class misc(commands.Cog):
         # Send to the target channel
         if target_channel:
             try:
+                await interaction.response.defer(thinking=True)
                 await target_channel.send(embed=embed)
-                await interaction.response.send_message(f"✅ `{embed_type.name}` sent successfully to {target_channel.mention}.", ephemeral=True)
+                await interaction.followup.send(f"✅ `{embed_type.name}` sent successfully to {target_channel.mention}.", ephemeral=True)
+
             except discord.Forbidden:
                 await interaction.response.send_message(f"❌ I don't have permissions to send messages in {target_channel.mention}.", ephemeral=True)
             except Exception as e:
