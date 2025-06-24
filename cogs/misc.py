@@ -309,40 +309,42 @@ class misc(commands.Cog):
         verified_role = guild.get_role(int(os.getenv("BT_ROLE_ID")))
         blacklist_role = guild.get_role(int(os.getenv("BT_BLACKLIST_ROLE_ID")))
 
+        # Make a copy for updates
         new_data = data.copy()
 
         for user_id, info in data.items():
-            member = guild.get_member(int(user_id))
+            member = guild.get_member(int(user_id))  # Check cache first
+
             if member is None:
                 try:
                     member = await guild.fetch_member(int(user_id))
-                except:
+                    await asyncio.sleep(1.2)  # Sleep after API hit
+                except discord.HTTPException as e:
+                    print(f"[WARN] Could not fetch member {user_id}: {e}")
                     continue
 
             status = info.get("status")
 
-            if status == "verified" and verified_role and verified_role not in member.roles:
-                await member.add_roles(verified_role,
-                                       reason="Auto-verified from DB")
-                updated = True
-                if log_channel:
-                    await log_channel.send(embed=Embed(
-                        title="ROLE UPDATE:",
-                        description=f"Gave verified role to <@{user_id}>",
-                        color=discord.Color.green()))
+            try:
+                if status == "verified" and verified_role and verified_role not in member.roles:
+                    await member.add_roles(verified_role, reason="Auto-verified from DB")
+                    updated = True
+                    if log_channel:
+                        await log_channel.send(embed=Embed(
+                            title="ROLE UPDATE:",
+                            description=f"Gave verified role to <@{user_id}>",
+                            color=discord.Color.green()))
 
-            elif status == "blacklist" and blacklist_role and blacklist_role not in member.roles:
-                await member.add_roles(blacklist_role,
-                                       reason="Auto-blacklisted from DB")
-                updated = True
-                if log_channel:
-                    await log_channel.send(embed=Embed(
-                        title="ROLE UPDATE:",
-                        description=f"Gave blacklist role to <@{user_id}>",
-                        color=discord.Color.red()))
+                elif status == "blacklist" and blacklist_role and blacklist_role not in member.roles:
+                    await member.add_roles(blacklist_role, reason="Auto-blacklisted from DB")
+                    updated = True
+                    if log_channel:
+                        await log_channel.send(embed=Embed(
+                            title="ROLE UPDATE:",
+                            description=f"Gave blacklist role to <@{user_id}>",
+                            color=discord.Color.red()))
 
-            elif status == "unverified":
-                try:
+                elif status == "unverified":
                     await member.kick(reason="Marked as unverified")
                     del new_data[user_id]
                     updated = True
@@ -351,19 +353,17 @@ class misc(commands.Cog):
                             title="ROLE UPDATE:",
                             description=f"Kicked unverified user <@{user_id}>",
                             color=discord.Color.dark_gray()))
-                except discord.Forbidden:
-                    continue
+            except discord.Forbidden:
+                print(f"[WARN] Missing permissions to modify {user_id}")
+                continue
 
-            await asyncio.sleep(1)
+            await asyncio.sleep(1.5)  # Space out actions to reduce risk of rate limit
 
         if updated:
             try:
-                save_data("btdb", [{
-                    "id": k,
-                    **v
-                } for k, v in new_data.items()])
+                save_data("btdb", [{"id": k, **v} for k, v in new_data.items()])
             except Exception as e:
-                print(f"Error saving data in bt_listener: {e}")
+                print(f"[ERROR] Failed to save btdb: {e}")
 
     @bt_listener.before_loop
     async def before_bt_listener(self):
