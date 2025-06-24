@@ -177,11 +177,10 @@ class misc(commands.Cog):
 
         if embed_info.get("image_url"):
             embed.set_image(url=embed_info["image_url"])
-
-        embed.set_footer(text=f"Made by .Suspected.",
-                        user_id = 1193398190314111117
-                        user = await bot.fetch_user(user_id)
-                        icon_url=user.avatar.url if user.avatar else user.default_avatar.url
+        footer_user_id = 1193398190314111117
+        footer_user = await self.bot.fetch_user(footer_user_id)
+        footer_icon_url = footer_user.avatar.url if footer_user.avatar else footer_user.default_avatar.url
+        embed.set_footer(text=f"Made by .Suspected.", icon_url=footer_icon_url)
         
         # Send to the target channel
         if target_channel:
