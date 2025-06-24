@@ -4,7 +4,7 @@ from discord import app_commands, Interaction, Embed
 import os
 from dotenv import load_dotenv
 from utils.loader import load_data, save_data
-import datetime
+from datetime import datetime, timezone
 from utils.commands import GROUPS, COMMANDS_REFERENCE, get_admin_info
 
 
@@ -127,7 +127,7 @@ class misc(commands.Cog):
             url=
             "https://drive.usercontent.google.com/download?id=10Rv5O9724GpyZIo5J264Wmc_JDumyi3Q&export=view&authuser=0"
         )
-        embed.set_footer(text=f"Updated by: .Suspected.",
+        embed.set_footer(text=f"Updated by: {interaction.user.display_name}",
                          icon_url=interaction.user.avatar.url
                          if interaction.user.avatar else None)
 
@@ -201,6 +201,7 @@ class misc(commands.Cog):
 
         help_text = "**Available Commands:**\n\n" + "\n".join(visible_commands)
         await interaction.response.send_message(help_text, ephemeral=True)
+
 
     @app_commands.command(
         name="modify",

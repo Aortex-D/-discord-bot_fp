@@ -1,6 +1,7 @@
 import os
 import discord
 import datetime
+from collections import defaultdict
 from typing import Optional
 from discord.ext import commands
 from discord import app_commands, ui, Interaction
@@ -757,6 +758,234 @@ class bugreports(commands.Cog):
         view = BugListPaginationView(self.bot, self.bug_report_manager, interaction.user)
         await view.initialize_and_send(interaction)
 
+    @app_commands.command(
+        name="dumpstats",
+        description="Shows bug report statistics for a specific date (Admin only)."
+    )
+    @app_commands.describe(
+        date="The date to check stats for in YYYY-MM-DD format."
+    )
+    async def dump_stats(self, interaction: Interaction, date: str):
+        """
+        Calculates and displays bug report statistics for a given date,
+        including total reports and reports per user.
+        """
+        is_hardcoded_admin = get_admin_info(interaction.user.id)
+        if not is_hardcoded_admin:
+            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+            return
+
+        await interaction.response.defer() # Defer without ephemeral=True for a public response later
+
+        try:
+            # Validate date format
+            datetime.strptime(date, "%Y-%m-%d")
+
+            # Load all reports from the manager (ensures data is fresh)
+            all_reports = await self.bug_report_manager._load_reports()
+
+            # Filter reports for the specified date
+            daily_reports = [
+                report for report in all_reports
+                if report.get('reportedAt') == date
+            ]
+
+            report_counts = len(daily_reports)
+            reporter_counts = defaultdict(int)
+
+            for report in daily_reports:
+                reporter_id = report.get('reporterID')
+                if reporter_id:
+                    reporter_counts[reporter_id] += 1
+
+            # Prepare the embed message
+            embed = discord.Embed(
+                title="📊 Bug Report Stats",
+                color=discord.Color.purple(),
+                timestamp=datetime.now(timezone.utc)
+            )
+
+            embed.add_field(
+                name="\u200b", # Zero width space for spacing
+                value=f"On **{date}**, **{report_counts}** bugs were reported.",
+                inline=False
+            )
+
+            if reporter_counts:
+                # Sort reporters by the number of bugs reported (descending)
+                sorted_reporters = sorted(reporter_counts.items(), key=lambda item: item[1], reverse=True)
+                
+                reporter_list_str = []
+                for reporter_id, count in sorted_reporters:
+                    reporter_list_str.append(f"• <@{reporter_id}> reported **{count}** bugs.")
+                
+                # Join the list into a string, limiting the display if too many reporters
+                display_limit = 10 # You can adjust this number
+                if len(reporter_list_str) > display_limit:
+                    embed.add_field(
+                        name="Top Reporters:",
+                        value="\n".join(reporter_list_str[:display_limit]) + f"\n...and more.",
+                        inline=False
+                    )
+                else:
+                    embed.add_field(
+                        name="Reporters:",
+                        value="\n".join(reporter_list_str) if reporter_list_str else "No specific reporters found for this date.",
+                        inline=False
+                    )
+            else:
+                embed.add_field(
+                    name="Reporters:",
+                    value="No bug reports found for this date.",
+                    inline=False
+                )
+
+            embed.set_footer(text=f"Issued by {interaction.user.display_name}",
+                             icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
+
+            # Send the message non-ephemerally
+            await interaction.followup.send(embed=embed)
+
+        except ValueError:
+            await interaction.followup.send(
+                f"❌ Invalid date format. Please use YYYY-MM-DD (e.g., 2023-01-15).",
+                ephemeral=True
+            )
+        except Exception as e:
+            await interaction.followup.send(
+                f"❌ An error occurred while fetching bug stats: {e}",
+                ephemeral=True
+            )
+            print(f"An error occurred in /dumpstats command: {e}")
+
+    @app_commands.command(
+        name="loadreports",
+        description="Clears a bug report channel and re-sends all reports of a specific status (Admin only)."
+    )
+    @app_commands.describe(
+        report_type="Select which type of reports to load."
+    )
+    @app_commands.choices(
+        report_type=[
+            app_commands.Choice(name="Pending Reports", value="pending"),
+            app_commands.Choice(name="Approved Reports", value="approved"),
+        ]
+    )
+    async def load_reports(self, interaction: Interaction, report_type: str):
+        is_hardcoded_admin = get_admin_info(interaction.user.id)
+        if not is_hardcoded_admin:
+            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True) # Defer to prevent timeout
+
+        channel_id_env_var = ""
+        embed_color = discord.Color.blue() # Default color
+        view_class = None # To hold the view class (Approval or Actions)
+
+        if report_type == "pending":
+            channel_id_env_var = "BUG_REPORT_CHANNEL_ID"
+            embed_color = discord.Color.red()
+            view_class = BugReportApprovalView
+            status_text = "`PENDING`"
+        elif report_type == "approved":
+            channel_id_env_var = "BUG_APPROVED_CHANNEL_ID"
+            embed_color = discord.Color.green()
+            view_class = BugReportActionsView
+            status_text = "`APPROVED`"
+        else:
+            await interaction.followup.send("Invalid report type selected.", ephemeral=True)
+            return
+
+        channel_id = os.getenv(channel_id_env_var)
+        if not channel_id:
+            await interaction.followup.send(f"❌ Error: {channel_id_env_var} not set in environment variables.", ephemeral=True)
+            return
+
+        try:
+            target_channel = self.bot.get_channel(int(channel_id))
+            if not target_channel:
+                await interaction.followup.send(f"❌ Error: Could not find the configured channel with ID {channel_id}.", ephemeral=True)
+                return
+
+            # Step 1: Clear existing messages in the channel
+            await interaction.followup.send(f"🔄 Clearing existing logs in {target_channel.mention}...")
+            deleted_count = 0
+            # Fetch messages and delete those sent by the bot
+            # Using a loop to handle potential large number of messages
+            async for message in target_channel.history(limit=None):
+                if message.author == self.bot.user: # Only delete messages sent by the bot
+                    try:
+                        await message.delete()
+                        deleted_count += 1
+                    except discord.Forbidden:
+                        print(f"Error: Bot does not have permissions to delete message {message.id} in {target_channel.name}. Please grant 'Manage Messages'.")
+                        await interaction.followup.send(f"❌ Error: Missing permissions to delete messages in {target_channel.mention}. Please grant 'Manage Messages'.", ephemeral=True)
+                        return # Exit if permissions are missing
+                    except discord.HTTPException as http_exc:
+                        print(f"HTTP error deleting message {message.id}: {http_exc}")
+                        # Continue or break depending on the severity of the HTTP error
+                await asyncio.sleep(0) # Small delay to respect rate limits during bulk deletion
+
+            await interaction.followup.send(f"✅ Cleared {deleted_count} bot messages from {target_channel.mention}.")
+
+            # Step 2: Load all reports of the specified type
+            await self.bug_report_manager._load_reports() # Ensure reports are up-to-date from your data source
+            reports_to_resend = await self.bug_report_manager.get_filtered_and_sorted_reports(status_filter=report_type)
+
+            if not reports_to_resend:
+                await interaction.followup.send(f"ℹ️ No {report_type} reports found to re-send.", ephemeral=True)
+                return
+
+            # Step 3: Resend reports to the channel
+            sent_count = 0
+            for report in reports_to_resend:
+                try:
+                    embed = discord.Embed(
+                        title=f"🚨 Bug Report: {report['title']}" if report_type == "pending" else f"✅ Approved Bug Report: {report['title']}",
+                        color=embed_color,
+                        timestamp=datetime.strptime(report.get('reportedAt', '1970-01-01'), "%Y-%m-%d") if report.get('reportedAt') else datetime.now(timezone.utc)
+                    )
+                    embed.set_author(
+                        name=f"Reported by {report['reporterID']}",
+                        icon_url=self.bot.user.avatar.url if self.bot.user.avatar else None # Using bot's avatar as placeholder
+                    )
+                    embed.add_field(name="Reporter", value=f"<@{report['reporterID']}> ({report['reporterID']})", inline=False)
+                    if report.get("original_reporter"):
+                        embed.add_field(name="Original Reporter", value=f"{report['original_reporter']}", inline=False)
+                    embed.add_field(name="Category", value=report['category'].capitalize(), inline=True)
+                    embed.add_field(name="Severity", value=report['severity'].capitalize(), inline=True)
+                    embed.add_field(name="Status", value=status_text, inline=True)
+                    embed.add_field(name="Description", value=report['description'], inline=False)
+                    # Handle reproduceSteps possibly having '\n' replaced with '\\n' in storage
+                    reproduce_steps_display = report.get('reproducesteps', 'N/A').replace('\\n', '\n')
+                    embed.add_field(name="Steps to Reproduce", value=reproduce_steps_display, inline=False)
+                    embed.set_footer(text=f"Bug Report ID: {report['id']}", icon_url=self.bot.user.avatar.url if self.bot.user.avatar else None)
+
+                    # Create and link the appropriate view
+                    if view_class:
+                        # Ensure report_data is passed correctly, as views need it for their actions
+                        view_instance = view_class(self.bot, self.bug_report_manager, report['id'], report)
+                        message = await target_channel.send(embed=embed, view=view_instance)
+                        view_instance.message = message # Link the view to the new message for future interactions
+                    else:
+                        await target_channel.send(embed=embed) # Fallback if no view is needed (though for pending/approved, views are crucial)
+
+                    sent_count += 1
+                    await asyncio.sleep(0.5) # 0.5 seconds delay per message = 20 messages per 10 seconds
+                except Exception as e:
+                    print(f"Error re-sending report {report.get('id', 'N/A')}: {e}")
+                    await interaction.followup.send(f"❌ Error re-sending report ID {report.get('id', 'N/A')}: {e}", ephemeral=True)
+                    continue # Continue to next report even if one fails
+
+            await interaction.followup.send(f"✅ Successfully re-sent {sent_count} {report_type} reports to {target_channel.mention}.", ephemeral=True)
+
+        except ValueError:
+            await interaction.followup.send(f"❌ An error occurred: Invalid channel ID for {channel_id_env_var}.", ephemeral=True)
+            print(f"Error: Channel ID from {channel_id_env_var} is not a valid integer.")
+        except Exception as e:
+            await interaction.followup.send(f"❌ An unexpected error occurred: {e}", ephemeral=True)
+            print(f"An unexpected error occurred in load_reports command: {e}")
 
 class BugListPaginationView(ui.View):
     def __init__(self, bot: commands.Bot, manager, author: discord.User):
