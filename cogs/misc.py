@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands, tasks
 from discord import app_commands, Interaction, Embed
 import os
+import asyncio
 from dotenv import load_dotenv
 from utils.loader import load_data, save_data
 from datetime import datetime, timezone
@@ -56,7 +57,7 @@ EMBED_CONTENTS = {
                         "- Inactivity may lead to removal of your tester role.\n"
                         "\n"
                         "**❓ Didn’t receive your roles yet?**\n"
-                        "- 🔹 Roles are issued automatically by our system.\n"
+                        "- 🔹 Roles are issued automatically by our system. It may take up to 5 minutes for your role to be issued.\n"
                         "- 🔹 After your application is approved, the administrator who sent you this server’s invite will mark you as verified in our database.\n"
                         "- 🔹 If you believe there’s a delay, please reach out to the administrator who invited you for verification assistance.\n"
                         "\n"
@@ -351,6 +352,8 @@ class misc(commands.Cog):
                             color=discord.Color.dark_gray()))
                 except discord.Forbidden:
                     continue
+
+            await asyncio.sleep(1)
 
         if updated:
             try:
