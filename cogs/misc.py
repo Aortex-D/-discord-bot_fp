@@ -320,7 +320,6 @@ class misc(commands.Cog):
                     member = await guild.fetch_member(int(user_id))
                     await asyncio.sleep(1.2)  # Sleep after API hit
                 except discord.HTTPException as e:
-                    print(f"[WARN] Could not fetch member {user_id}: {e}")
                     continue
 
             status = info.get("status")
