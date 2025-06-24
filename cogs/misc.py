@@ -11,6 +11,60 @@ from utils.commands import GROUPS, COMMANDS_REFERENCE, get_admin_info
 ABSENCE_ROLE_ID = int(os.getenv("ABSENCE_ROLE_ID"))
 
 
+EMBED_CONTENTS = {
+    "updatelog": {
+        "title": "📢 New Bot Update!",
+        "color": discord.Color.orange(),
+        "description": ("\n"
+                        "**New features:**\n"
+                        "- Added Shop!\n"
+                        "- Upated Bug Report Command\n"
+                        "- Added a new command /buglist\n"
+                        "- Added a new /absence command\n"
+                        "- Added new misc cmds: /ping, /help \n"
+                        "- Added graphics on few commands.\n"
+                        "- Added points logging channel.\n"
+                        "- Updated /userstats. (Now everyone can use it! + few changes)\n"
+                        "- Added update logger.\n"
+                        "- Optimized code for better performance\n"
+                        "\n"
+                        "**Bug Fixes:**\n"
+                        "- Fixed issue with shop gui.\n"
+                        "- Fixed issue with /submitbug command.\n"
+                        "- Fixed issue with /buglist command.\n"
+                        "- Fixed issue with /absence command.\n"
+                        "- Fixed issue with /help command.\n"
+                        "- Fixed issue with shop gui. 2.0\n"
+                        "- Added desc cap in /buglist command.\n"
+                        "- Added realtime user data loader.\n"
+                        "\n"
+                        "**NOTE**\n"
+                        "Big thanks to the testers who helped in testing the bot! Your feedback was super valuable, really pushing the bot forward. We couldn't have done it without you all. ❤"),
+        "image_url": "https://drive.usercontent.google.com/download?id=10Rv5O9724GpyZIo5J264Wmc_JDumyi3Q&export=view&authuser=0"
+    },
+    "welcomemsg": {
+        "title": "👋 Welcome to Beta Testers Server!",
+        "color": discord.Color.orange(),
+        "description": (
+                        "We’re excited to have you on board as a Beta Tester for Fakepixel Skyblock, Your contribution will help us build something amazing!\n"
+                        "\n"
+                        "**🛠 What’s your role here?**\n"
+                        "✅ Report bugs: Use the command /submitbug whenever you discover a bug.\n"
+                        "✅ Stay active: Your activity is monitored to ensure an engaged tester community.\n"
+                        "✅ Earn rewards: Every valid bug report can earn you points which you can use in shop to redeem rewards!\n"
+                        "⚠️ Inactivity matters: If you remain inactive for too long, your tester role might be removed.\n"
+                        "\n"
+                        "**❓ Didn’t receive your roles yet?**\n"
+                        "🔹 Roles are issued automatically by our system.\n"
+                        "🔹 After your application is approved, the administrator who sent you this server’s invite will mark you as verified in our database.\n"
+                        "🔹 If you believe there’s a delay, please reach out to the administrator who invited you for verification assistance.\n"
+                        "\n"
+                        "⚡ Let’s work together to make Fakepixel Skyblock the best experience possible!"
+        ),
+        "image_url": None # Or provide a URL if you have one for welcome
+    }
+}
+
 class CogReloadSelect(discord.ui.Select):
 
     def __init__(self, bot: commands.Bot):
@@ -79,68 +133,68 @@ class misc(commands.Cog):
         await interaction.response.send_message(
             f"🏓 Pong! Latency is `{latency}ms`", ephemeral=True)
 
-    @app_commands.command(name="update", description="Updates the bot")
-    async def update(self, interaction: discord.Interaction):
+    @app_commands.command(name="sendembed", description="Sends a pre-defined embed message to a channel.")
+    @app_commands.describe(embed_type="Choose the type of embed to send",
+                           channel="The channel to send the embed to (defaults to update log channel)")
+    @app_commands.choices(embed_type=[
+        app_commands.Choice(name="Update Log", value="updatelog"),
+        app_commands.Choice(name="Welcome Message", value="welcomemsg"),
+        # Add choices for any new embed types you add to EMBED_CONTENTS
+        # app_commands.Choice(name="Another Embed", value="anotherembed")
+    ])
+    async def sendembed(self, interaction: discord.Interaction, embed_type: app_commands.Choice[str], channel: discord.TextChannel = None):
         is_hardcoded_admin = get_admin_info(interaction.user.id)
         member = interaction.guild.get_member(interaction.user.id)
         if not member or not is_hardcoded_admin:
             await interaction.response.send_message("❌ You don't have permission to use this.", ephemeral=True)
             return
-         
 
-        # ✅ Prepare embed
-        embed = discord.Embed(title="📢 New Bot Update!",
-                              timestamp=datetime.datetime.utcnow(),
-                              color=discord.Color.orange())
+        # Get embed data from the dictionary
+        embed_info = EMBED_CONTENTS.get(embed_type.value)
 
-        upd_txt = ("\n"
-                   "**New features:**\n"
-                   "- Added Shop!\n"
-                   "- Upated Bug Report Command\n"
-                   "- Added a new command /buglist\n"
-                   "- Added a new /absence command\n"
-                   "- Added new misc cmds: /ping, /help \n"
-                   "- Added graphics on few commands.\n"
-                   "- Added points logging channel.\n"
-                   "- Updated /userstats. (Now everyone can use it! + few changes)\n"
-                   "- Added update logger.\n"
-                   "- Optimized code for better performance\n"
-                   "\n"
-                   "**Bug Fixes:**\n"
-                   "- Fixed issue with shop gui.\n"
-                   "- Fixed issue with /submitbug command.\n"
-                   "- Fixed issue with /buglist command.\n"
-                   "- Fixed issue with /absence command.\n"
-                   "- Fixed issue with /help command.\n"
-                   "- Fixed issue with shop gui. 2.0\n"
-                   "- Added desc cap in /buglist command.\n"
-                   "- Added realtime user data loader.\n"
-                   "\n"
-                   "**NOTE**\n"
-                   "Big thanks to the testers who helped in testing the bot! Your feedback was super valuable, really pushing the bot forward. We couldn't have done it without you all. ❤"
-                )
-        
-        "Rewards"
+        if not embed_info:
+            await interaction.response.send_message(f"❌ Embed type `{embed_type.value}` not found.", ephemeral=True)
+            return
 
-        embed.add_field(name="\u200b", value=upd_txt, inline=False)
-        embed.set_image(
-            url=
-            "https://drive.usercontent.google.com/download?id=10Rv5O9724GpyZIo5J264Wmc_JDumyi3Q&export=view&authuser=0"
-        )
-        embed.set_footer(text=f"Updated by: {interaction.user.display_name}",
-                         icon_url=interaction.user.avatar.url
-                         if interaction.user.avatar else None)
-
-        # ✅ Send to update log channel
-        channel_id = int(os.getenv("UPDATE_LOG_CHANNEL_ID"))
-        channel = self.bot.get_channel(channel_id)
-        if channel:
-            await channel.send(embed=embed)
-            await interaction.response.send_message(
-                "✅ Update log sent successfully.", ephemeral=True)
+    # Determine the target channel
+        if channel is None:
+            target_channel_id = int(os.getenv("UPDATE_LOG_CHANNEL_ID")) # Default to the update log channel
+            target_channel = self.bot.get_channel(target_channel_id)
+            if not target_channel:
+                await interaction.response.send_message("⚠️ Could not find the default update log channel. Please specify a channel.", ephemeral=True)
+                return
         else:
-            await interaction.response.send_message(
-                "⚠️ Could not find the update log channel.")
+            target_channel = channel
+
+        # Prepare embed
+        embed = discord.Embed(
+            title=embed_info.get("title", "No Title"),
+            timestamp=datetime.utcnow(),
+            color=embed_info.get("color", discord.Color.default())
+        )
+
+        embed.add_field(name="\u200b", value=embed_info.get("description", "No description provided."), inline=False)
+
+        if embed_info.get("image_url"):
+            embed.set_image(url=embed_info["image_url"])
+
+        embed.set_footer(text=f"Made by .Suspected.",
+                        user_id = 1193398190314111117
+                        user = await bot.fetch_user(user_id)
+                        icon_url=user.avatar.url if user.avatar else user.default_avatar.url
+        
+        # Send to the target channel
+        if target_channel:
+            try:
+                await target_channel.send(embed=embed)
+                await interaction.response.send_message(f"✅ `{embed_type.name}` sent successfully to {target_channel.mention}.", ephemeral=True)
+            except discord.Forbidden:
+                await interaction.response.send_message(f"❌ I don't have permissions to send messages in {target_channel.mention}.", ephemeral=True)
+            except Exception as e:
+                await interaction.response.send_message(f"❌ An error occurred while sending the embed: ```{e}```", ephemeral=True)
+        else:
+            await interaction.response.send_message("⚠️ Could not determine a channel to send the embed.", ephemeral=True)
+
 
     @app_commands.command(name="absence",
                           description="Give or remove the absence role")
@@ -306,10 +360,13 @@ class misc(commands.Cog):
                     continue
 
         if updated:
-            await save_data("btdb", [{
-                "id": k,
-                **v
-            } for k, v in new_data.items()])
+            try:
+                save_data("btdb", [{
+                    "id": k,
+                    **v
+                } for k, v in new_data.items()])
+            except Exception as e:
+                print(f"Error saving data in bt_listener: {e}")
 
     @bt_listener.before_loop
     async def before_bt_listener(self):
