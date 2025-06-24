@@ -46,22 +46,23 @@ EMBED_CONTENTS = {
         "title": "👋 Welcome to Beta Testers Server!",
         "color": discord.Color.orange(),
         "description": (
-                        "We’re excited to have you on board as a Beta Tester for Fakepixel Skyblock, Your contribution will help us build something amazing!\n"
+                        "Congratulations on becoming a Beta Tester for Fakepixel! As part of the testing team, your task is to help identify bugs, verify reports, and contribute to improving the server. Your participation will support the development process as we work towards creating a stable and polished gameplay experience.\n"
                         "\n"
                         "**🛠 What’s your role here?**\n"
-                        "✅ Report bugs: Use the command /submitbug whenever you discover a bug.\n"
-                        "✅ Stay active: Your activity is monitored to ensure an engaged tester community.\n"
-                        "✅ Earn rewards: Every valid bug report can earn you points which you can use in shop to redeem rewards!\n"
-                        "⚠️ Inactivity matters: If you remain inactive for too long, your tester role might be removed.\n"
+                        "- Report bugs using the /submitbug command whenever you discover an issue.\n"
+                        "- Verify bug reports by regularly checking the forum’s bug report section. Review those reports, mark them as verified or unverified, and ensure they are logged properly on behalf of the original reporters.\n"
+                        "- Stay active — your activity is monitored to ensure a helpful tester community.\n"
+                        "- Earn rewards for every valid bug report or verified forum report. Points can be redeemed for rewards in the shop.\n"
+                        "- Inactivity may lead to removal of your tester role.\n"
                         "\n"
                         "**❓ Didn’t receive your roles yet?**\n"
-                        "🔹 Roles are issued automatically by our system.\n"
-                        "🔹 After your application is approved, the administrator who sent you this server’s invite will mark you as verified in our database.\n"
-                        "🔹 If you believe there’s a delay, please reach out to the administrator who invited you for verification assistance.\n"
+                        "- 🔹 Roles are issued automatically by our system.\n"
+                        "- 🔹 After your application is approved, the administrator who sent you this server’s invite will mark you as verified in our database.\n"
+                        "- 🔹 If you believe there’s a delay, please reach out to the administrator who invited you for verification assistance.\n"
                         "\n"
                         "⚡ Let’s work together to make Fakepixel Skyblock the best experience possible!"
         ),
-        "image_url": None # Or provide a URL if you have one for welcome
+        "image_url": None
     }
 }
 
@@ -142,7 +143,7 @@ class misc(commands.Cog):
         # Add choices for any new embed types you add to EMBED_CONTENTS
         # app_commands.Choice(name="Another Embed", value="anotherembed")
     ])
-    async def sendembed(self, interaction: discord.Interaction, embed_type: app_commands.Choice[str], channel: discord.TextChannel = None):
+    async def sendembed(self, interaction: discord.Interaction, embed_type: app_commands.Choice[str], channel: discord.TextChannel):
         is_hardcoded_admin = get_admin_info(interaction.user.id)
         member = interaction.guild.get_member(interaction.user.id)
         if not member or not is_hardcoded_admin:
@@ -157,14 +158,7 @@ class misc(commands.Cog):
             return
 
     # Determine the target channel
-        if channel is None:
-            target_channel_id = int(os.getenv("UPDATE_LOG_CHANNEL_ID")) # Default to the update log channel
-            target_channel = self.bot.get_channel(target_channel_id)
-            if not target_channel:
-                await interaction.response.send_message("⚠️ Could not find the default update log channel. Please specify a channel.", ephemeral=True)
-                return
-        else:
-            target_channel = channel
+        target_channel = channel
 
         # Prepare embed
         embed = discord.Embed(
