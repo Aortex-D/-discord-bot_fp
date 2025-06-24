@@ -164,11 +164,10 @@ class misc(commands.Cog):
         # Prepare embed
         embed = discord.Embed(
             title=embed_info.get("title", "No Title"),
+            description=embed_info.get("description", "No description provided."),
             timestamp=datetime.utcnow(),
             color=embed_info.get("color", discord.Color.default())
         )
-
-        embed.add_field(name="\u200b", value=embed_info.get("description", "No description provided."), inline=False)
 
         if embed_info.get("image_url"):
             embed.set_image(url=embed_info["image_url"])
