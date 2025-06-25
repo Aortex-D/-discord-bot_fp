@@ -88,7 +88,7 @@ async def on_ready():
             if update_channel:
                 embed = discord.Embed(
                     title="🚀 Bot has been updated",
-                    description="**Changes**\n- Fixed buttons not working on /buglist.\n- Fixed user data was not loading from the database (Some users).\n- Problem with buttons in #approve-channel.\n- Added save 'verified' & 'declined' bugs feature & database",
+                    description="**Changes**\n- Added /leaderboard",
                     color=discord.Color.green()
                 )
                 embed.set_footer(text=f"Updated by _Suspected_")
