@@ -97,9 +97,22 @@ class Economy(commands.Cog):
     @app_commands.command(name="userstats", description="View bug report stats and balance of a user.")
     @app_commands.describe(user="User whose stats you want to check")
     async def stats(self, interaction: discord.Interaction, user: discord.User):
+        await interaction.response.defer()
+
         balance = await self.get_balance(user.id)
-        stats = await self.get_userstats(user.id)
-        total = stats["approved"] + stats["fixed"] + stats["pending"] + stats["declined"]
+        all_reports = await asyncio.to_thread(load_data, "bugrep")
+        user_id = str(user.id)
+
+        stats = {"approved": 0, "fixed": 0, "pending": 0, "declined": 0}
+
+        for report in all_reports:
+            if report.get("reporterID") == user_id:
+                status = report.get("status", "pending").lower()
+                if status in stats:
+                    stats[status] += 1
+
+        total = sum(stats.values())
+
         embed = discord.Embed(
             title="📊 User Stats",
             color=discord.Color.blue(),
@@ -115,7 +128,8 @@ class Economy(commands.Cog):
             f"**Total Bug Reports:** `{total}`"
         ), inline=False)
         embed.set_footer(text=f"Requested by {interaction.user}", icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
+
 
     # Define a Group for points commands
     points_group = app_commands.Group(name="points", description="Commands for managing user points.")

@@ -159,19 +159,6 @@ class BugReportModal(ui.Modal, title='🐞 Bug Report'):
                 report_data["original_reporter"] = self.original_reporter_id
 
             report_id = await self.manager.add_report(report_data)
-            btdb = _get_db()["btdb"]
-            btdb.update_one(
-                {"id": str(interaction.user.id)},
-                {
-                    "$inc": {"pend_bug_reports": 1},
-                    "$setOnInsert": {
-                    "fixed_bug_reports": 0,
-                    "approved_bug_reports": 0,
-                    "declined_bug_reports": 0
-                }
-                },
-                upsert=True
-            )
 
             # Create an embed to send to the Discord channel for administrators
             embed = discord.Embed(
@@ -271,6 +258,8 @@ class BugReportApprovalView(ui.View):
         await interaction.response.defer(ephemeral=True)
 
         report_id, report_data = await self._get_current_report_info(interaction)
+        self.report_id = report_id
+        self.report_data = report_data
         if not report_data:
             await interaction.followup.send("❌ Error: Could not retrieve report data for this interaction. The report might have been deleted or corrupted.", ephemeral=True)
             return
@@ -319,19 +308,6 @@ class BugReportApprovalView(ui.View):
 
                 # Send to approve log channel
                 await self.manager.update_report_status(self.report_id, "approved")
-                btdb = _get_db()["btdb"]
-                user_id_for_stats = self.report_data.get("reporterID") # Get reporterID from report_data
-                if user_id_for_stats and str(user_id_for_stats).isdigit():
-                    btdb.update_one(
-                        {"id": str(user_id_for_stats)}, # <-- EXPLICITLY CAST TO STRING HERE
-                        {
-                            "$inc": {
-                                "pend_bug_reports": -1,       # Decrement pending
-                                "approved_bug_reports": 1     # Increment approved
-                            }
-                        },
-                        upsert=True # Add upsert=True to ensure the entry exists for reporterID
-                    )
         
                 # Send to approved channel
                 bug_approved_channel_id = os.getenv("BUG_APPROVED_CHANNEL_ID")
@@ -360,7 +336,7 @@ class BugReportApprovalView(ui.View):
 
             else:
                 point_selection_view = PointSelectionView(self.bot, self.manager, self.report_id, self.report_data, self.message)
-                await interaction.followup.send(
+                points_org_msg = await interaction.followup.send(
                     embed=discord.Embed(
                         title="🎁 Reward Points",
                         description="Please select how many points to award.",
@@ -369,6 +345,7 @@ class BugReportApprovalView(ui.View):
                     view=point_selection_view,
                     ephemeral=True
                 )
+                point_selection_view.original_message = points_org_msg
                 return
         except Exception as e:
             await interaction.followup.send(f"❌ An error occurred while approving the report: {e}", ephemeral=True)
@@ -430,20 +407,8 @@ class BugReportApprovalView(ui.View):
             await archive_channel.send(embed=archive_embed)
             
             # Delete the report from the database and original message 
-            await self.manager.delete_report(self.report_id)
-            btdb = _get_db()["btdb"]
-            user_id = self.report_data.get("reporterID")
-            if user_id and str(user_id).isdigit():
-                btdb.update_one(
-                    {"id": str(user_id)},
-                    {
-                        "$inc": {
-                            "pend_bug_reports": -1,
-                            "declined_bug_reports": 1
-                        }
-                    },
-                    upsert=True
-                )
+            await self.manager.update_report_status(self.report_id, "declined")
+        
             if self.message:
                 await self.message.delete()
 
@@ -500,12 +465,8 @@ class PointSelectionView(ui.View):
     async def on_timeout(self):
         for item in self.children:
             item.disabled = True
-        # Since this view is ephemeral, directly editing the message might not be necessary
-        # as it will disappear for the user on timeout anyway.
-        # If this view were sent publicly, this would be crucial.
-        # For now, leaving the original message edit check as a safety net.
-        if self.message: # Assuming self.message would be set if it was a persistent/non-ephemeral view
-            await self.message.edit(view=self)
+        if self.original_message:  # ← FIXED: use original_message not self.message
+            await self.original_message.edit(view=self)
 
 
     async def _give_points_and_finalize(self, interaction: Interaction, points: int):
@@ -542,19 +503,6 @@ class PointSelectionView(ui.View):
             print("Warning: Economy cog not found. Cannot add points.")
 
         await self.manager.update_report_status(self.report_id, "approved")
-        btdb = _get_db()["btdb"]
-        user_id_for_stats = self.report_data.get("reporterID") # Get reporterID from report_data
-        if user_id_for_stats and str(user_id_for_stats).isdigit():
-            btdb.update_one(
-                {"id": str(user_id_for_stats)}, # <-- EXPLICITLY CAST TO STRING HERE
-                {
-                    "$inc": {
-                        "pend_bug_reports": -1,       # Decrement pending
-                        "approved_bug_reports": 1     # Increment approved
-                    }
-                },
-                upsert=True # Add upsert=True to ensure the entry exists for reporterID
-            )
         
         # Send to approved channel
         bug_approved_channel_id = os.getenv("BUG_APPROVED_CHANNEL_ID")
@@ -662,20 +610,7 @@ class BugReportActionsView(ui.View):
             await archive_channel.send(embed=archive_embed)
 
             # Delete the report after it's fixed and processed
-            await self.manager.delete_report(self.report_id)
-            btdb = _get_db()["btdb"]
-            reporter_id_for_stats = self.report_data.get("reporterID") # Get reporterID
-            if reporter_id_for_stats and str(reporter_id_for_stats).isdigit(): # Check reporterID
-                btdb.update_one(
-                    {"id": str(reporter_id_for_stats)}, # Target reporterID for updates
-                    {
-                        "$inc": {
-                            "approved_bug_reports": -1, # Decrement approved
-                            "fixed_bug_reports": 1      # Increment fixed
-                        }
-                    },
-                    upsert=True # Add upsert=True to ensure the entry exists for reporterID
-                )
+            await self.manager.update_report_status(self.report_id, "fixed")
 
             if self.message: # Delete message from BUG_APPROVED_CHANNEL_ID 
                 await self.message.delete()
@@ -738,21 +673,7 @@ class BugReportActionsView(ui.View):
             )
             await archive_channel.send(embed=archive_embed)
             
-            await self.manager.delete_report(self.report_id)
-            btdb = _get_db()["btdb"]
-            user_id = self.report_data.get("reporterID")
-
-            if user_id and str(user_id).isdigit():
-                btdb.update_one(
-                    {"id": str(user_id)},
-                    {
-                        "$inc": {
-                            "approved_bug_reports": -1,
-                            "declined_bug_reports": 1
-                        }
-                    },
-                    upsert=True
-                )
+            await self.manager.update_report_status(self.report_id, "declined")
 
 
             if self.message: # Delete message from BUG_APPROVED_CHANNEL_ID 
@@ -1069,6 +990,8 @@ class BugListPaginationView(ui.View):
         self.status_options = [ # New status options 
             discord.SelectOption(label="Pending", value="pending"),
             discord.SelectOption(label="Approved", value="approved"),
+            discord.SelectOption(label="Fixed", value="fixed"),
+            discord.SelectOption(label="Declined", value="declined")
         ]
 
         self.sort_options = [
@@ -1087,17 +1010,25 @@ class BugListPaginationView(ui.View):
         self._refresh_select_menu()     # Add the select menu initially
 
     def _add_navigation_buttons(self):
-        # Remove existing navigation buttons before adding them to avoid duplicates
-        # We must make a copy of self.children as we are modifying it during iteration.
-        for item in list(self.children): 
+    # Remove existing navigation buttons before adding them to avoid duplicates
+        for item in list(self.children):
             if isinstance(item, discord.ui.Button) and item.label in ["«", "◀", "▶", "»"]:
                 self.remove_item(item)
 
-        # Define and add new button instances with their callbacks
-        first = discord.ui.Button(label="«", style=discord.ButtonStyle.blurple, custom_id="pagination_first", row=1)
-        prev = discord.ui.Button(label="◀", style=discord.ButtonStyle.blurple, custom_id="pagination_prev", row=1)
-        next_btn = discord.ui.Button(label="▶", style=discord.ButtonStyle.blurple, custom_id="pagination_next", row=1)
-        last = discord.ui.Button(label="»", style=discord.ButtonStyle.blurple, custom_id="pagination_last", row=1)
+        # Define and add new buttons with proper callbacks
+        first = discord.ui.Button(label="«", style=discord.ButtonStyle.blurple, row=1)
+        first.callback = self.first_page_button_callback
+        prev = discord.ui.Button(label="◀", style=discord.ButtonStyle.blurple, row=1)
+        prev.callback = self.previous_button_callback
+        next_btn = discord.ui.Button(label="▶", style=discord.ButtonStyle.blurple, row=1)
+        next_btn.callback = self.next_button_callback
+        last = discord.ui.Button(label="»", style=discord.ButtonStyle.blurple, row=1)
+        last.callback = self.last_page_button_callback
+
+        self.add_item(first)
+        self.add_item(prev)
+        self.add_item(next_btn)
+        self.add_item(last)
 
 
     class SortSelect(ui.Select):
