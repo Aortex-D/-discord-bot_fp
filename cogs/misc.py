@@ -249,12 +249,11 @@ class misc(commands.Cog):
 
     @app_commands.command(
         name="modify",
-        description="Modify a user by ID (verified / blacklist / unverified)")
+        description="Modify a user by ID (verified / unverified)")
     @app_commands.describe(user_id="The Discord ID of the user",
                            status="The action to perform")
     @app_commands.choices(status=[
         app_commands.Choice(name="verified", value="verified"),
-        app_commands.Choice(name="blacklist", value="blacklist"),
         app_commands.Choice(name="unverified", value="unverified")
     ])
     async def modify_slash(self, interaction: Interaction, user_id: str,
@@ -286,7 +285,7 @@ class misc(commands.Cog):
         channel = self.bot.get_channel(log_channel_id)
         if channel:
             embed = Embed(title="ROLE UPDATE:",
-                          description="No change has been made.",
+                          description=f"Marked <@{user_id}> as `{status_value}` in DB.",
                           color=discord.Color.orange())
             await channel.send(embed=embed)
 
@@ -304,7 +303,6 @@ class misc(commands.Cog):
         log_channel = self.bot.get_channel(log_channel_id)
 
         verified_role = guild.get_role(int(os.getenv("BT_ROLE_ID")))
-        blacklist_role = guild.get_role(int(os.getenv("BT_BLACKLIST_ROLE_ID")))
 
         # Make a copy for updates
         new_data = data.copy()
@@ -331,18 +329,9 @@ class misc(commands.Cog):
                             description=f"Gave verified role to <@{user_id}>",
                             color=discord.Color.green()))
 
-                elif status == "blacklist" and blacklist_role and blacklist_role not in member.roles:
-                    await member.add_roles(blacklist_role, reason="Auto-blacklisted from DB")
-                    updated = True
-                    if log_channel:
-                        await log_channel.send(embed=Embed(
-                            title="ROLE UPDATE:",
-                            description=f"Gave blacklist role to <@{user_id}>",
-                            color=discord.Color.red()))
-
                 elif status == "unverified":
                     await member.kick(reason="Marked as unverified")
-                    del new_data[user_id]
+                    new_data.pop(user_id, None)
                     updated = True
                     if log_channel:
                         await log_channel.send(embed=Embed(
@@ -357,7 +346,7 @@ class misc(commands.Cog):
 
         if updated:
             try:
-                save_data("btdb", [{"id": k, **v} for k, v in new_data.items()])
+                save_data("btdb", list(new_data.values()))
             except Exception as e:
                 print(f"[ERROR] Failed to save btdb: {e}")
 
