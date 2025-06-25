@@ -81,7 +81,21 @@ async def on_ready():
         print(f"❌ Failed to sync commands from main on_ready: {e}\n")
     names = ", ".join(f"/{cmd.name}" for cmd in synced)
     print(f"🔗 Synced: {names}")
-
+    update_log_channel_id = os.getenv("UPDATE_LOG_CHANNEL_ID")
+    if update_log_channel_id:
+        try:
+            update_channel = bot.get_channel(int(update_log_channel_id))
+            if update_channel:
+                embed = discord.Embed(
+                    title="🚀 Bot has been updated",
+                    description="**Changes**\n- Fixed buttons not working on /buglist.\n- Fixed user data was not loading from the database (Some users).\n- Problem with buttons in #approve-channel.\n- Added save 'verified' & 'declined' bugs feature & database",
+                    color=discord.Color.green()
+                )
+                embed.set_footer(text=f"Updated by _Suspected_")
+                embed.timestamp = discord.utils.utcnow()
+                await update_channel.send(embed=embed)
+        except Exception as e:
+            print(f"❌ Failed to send startup message: {e}")
 
 @bot.event
 async def on_disconnect():
