@@ -2,9 +2,32 @@ import os
 import discord
 import asyncio
 from discord.ext import commands
-from discord import app_commands, Interaction, ui
+from discord import app_commands, Interaction, ui, Embed
 from utils.loader import load_data, save_data
 from utils.commands import get_admin_info
+
+
+class LeaderboardView(ui.View):
+    def __init__(self, bot, pages):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.pages = pages
+        self.current_page = 0
+
+    async def update_message(self, interaction):
+        await interaction.response.edit_message(embed=self.pages[self.current_page], view=self)
+
+    @ui.button(label="◀", style=discord.ButtonStyle.blurple)
+    async def prev_page(self, interaction: Interaction, button: ui.Button):
+        if self.current_page > 0:
+            self.current_page -= 1
+            await self.update_message(interaction)
+
+    @ui.button(label="▶", style=discord.ButtonStyle.blurple)
+    async def next_page(self, interaction: Interaction, button: ui.Button):
+        if self.current_page < len(self.pages) - 1:
+            self.current_page += 1
+            await self.update_message(interaction)
 
 class Economy(commands.Cog):
     def __init__(self, bot):
@@ -178,6 +201,64 @@ class Economy(commands.Cog):
         # Pass 'self' (the Economy cog instance) as the manager to the view
         view = ConfirmResetView(user, self)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @app_commands.command(name="leaderboard", description="View leaderboard by points or bug reports.")
+    @app_commands.describe(choice="Select type of leaderboard to show")
+    @app_commands.choices(choice=[
+        app_commands.Choice(name="Points", value="points"),
+        app_commands.Choice(name="Bug Reports", value="bugs")
+    ])
+    async def leaderboard(self, interaction: Interaction, choice: app_commands.Choice[str]):
+        await interaction.response.defer()
+
+        pages = []
+        entries_per_page = 10
+
+        if choice.value == "points":
+            economy_data = await asyncio.to_thread(load_data, "economy")
+            sorted_data = sorted(economy_data, key=lambda x: x.get("balance", 0), reverse=True)
+
+            for i in range(0, len(sorted_data), entries_per_page):
+                embed = Embed(
+                    title="🏆 Points Leaderboard",
+                    description="",
+                    color=discord.Color.gold(),
+                    timestamp=interaction.created_at
+                )
+                for j, entry in enumerate(sorted_data[i:i + entries_per_page], start=i + 1):
+                    user_id = int(entry["id"])
+                    balance = entry["balance"]
+                    user = await self.bot.fetch_user(user_id)
+                    embed.description += f"**#{j} {user.display_name if user else 'Unknown'}:** {balance} points\n"
+                embed.set_footer(text=f"Requested by {interaction.user.display_name}", icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
+                pages.append(embed)
+
+        elif choice.value == "bugs":
+            bug_data = await asyncio.to_thread(load_data, "bugrep")
+            bug_counts = {}
+
+            for report in bug_data:
+                uid = report.get("reporterID")
+                if uid:
+                    bug_counts[uid] = bug_counts.get(uid, 0) + 1
+
+            sorted_bugs = sorted(bug_counts.items(), key=lambda x: x[1], reverse=True)
+
+            for i in range(0, len(sorted_bugs), entries_per_page):
+                embed = Embed(
+                    title="🏆 Bug Reports Leaderboard",
+                    description="",
+                    color=discord.Color.blue(),
+                    timestamp=interaction.created_at
+                )
+                for j, (uid, count) in enumerate(sorted_bugs[i:i + entries_per_page], start=i + 1):
+                    user = await self.bot.fetch_user(int(uid))
+                    embed.description += f"**#{j} {user.display_name if user else 'Unknown'}:** {count} bugs\n"
+                embed.set_footer(text=f"Requested by {interaction.user.display_name}", icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
+                pages.append(embed)
+
+        view = LeaderboardView(self.bot, pages)
+        await interaction.followup.send(embed=pages[0], view=view)
 
 class ConfirmResetView(ui.View):
     def __init__(self, user: discord.User, manager):
