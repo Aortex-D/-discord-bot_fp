@@ -15,11 +15,11 @@ class BugReportManager:
     def __init__(self, bot):
         self.bot = bot
         self.reports = load_data("bugrep")
-        # Ensure 'status' is present for existing reports or initialize
         for report in self.reports:
             if "status" not in report:
                 report["status"] = "pending"
         self.next_id = max([report.get("id", 0) for report in self.reports]) + 1 if self.reports else 1
+        self._id_lock = asyncio.Lock()
 
     async def _load_reports(self):
         reports = await asyncio.to_thread(load_data, "bugrep")
@@ -32,12 +32,13 @@ class BugReportManager:
         await asyncio.to_thread(save_data, "bugrep", self.reports)
 
     async def add_report(self, report_data: dict):
-        report_data["id"] = self.next_id
-        report_data["status"] = "pending" # New reports are always pending initially 
-        self.reports.append(report_data)
-        await self._save_reports()
-        self.next_id += 1
-        return report_data["id"]
+        async with self._id_lock:
+            report_data["id"] = self.next_id
+            report_data["status"] = "pending"
+            self.reports.append(report_data)
+            await self._save_reports()
+            self.next_id += 1
+            return report_data["id"]
 
     async def get_report_by_id(self, report_id: int):
         return next((report for report in self.reports if report.get("id") == report_id), None)
@@ -249,7 +250,7 @@ class BugReportApprovalView(ui.View):
         return report_id, report_data
 
     @ui.button(label="Approve", style=discord.ButtonStyle.green, custom_id="bug_approve")
-    async def approve_button(self, interaction: Interaction, button: ui.Button):
+    async def approve_button(self, interaction, button):
         is_hardcoded_admin = get_admin_info(interaction.user.id)
         member = interaction.guild.get_member(interaction.user.id)
         if not member or not is_hardcoded_admin:
@@ -261,95 +262,61 @@ class BugReportApprovalView(ui.View):
         self.report_id = report_id
         self.report_data = report_data
         if not report_data:
-            await interaction.followup.send("❌ Error: Could not retrieve report data for this interaction. The report might have been deleted or corrupted.", ephemeral=True)
-            return
-        bug_approved_channel_id = os.getenv("BUG_APPROVED_CHANNEL_ID")
-        if not bug_approved_channel_id:
-            await interaction.followup.send("❌ Error: Bug approved channel not configured. Cannot approve.", ephemeral=True)
+            await interaction.followup.send("❌ Error: Could not retrieve report data.", ephemeral=True)
             return
 
-        try:
-            approved_channel = self.bot.get_channel(int(bug_approved_channel_id))
+        eco = self.bot.get_cog("Economy")
+        points_recipient_id = int(report_data.get("reporterID"))
 
-            eco = self.bot.get_cog("Economy")
-            # Use report_data for original_reporter and reporterID
-            reporter_discord_id = report_data.get("reporterID")
-            points_recipient_id = int(reporter_discord_id)
-
-            if report_data.get("original_reporter"):
-                # Auto give 1 point
-                eco = self.bot.get_cog("Economy")
-                if eco:
-                    await eco._add_points_to_data(points_recipient_id, 1)
-                    reporter_user = await self.bot.fetch_user(points_recipient_id)
-
-                    # Reward embed
-                    reward_channel_id = os.getenv("BUG_POINT_REWARD_CHANNEL_ID")
-                    if reward_channel_id:
-                        reward_channel = self.bot.get_channel(int(reward_channel_id))
-                        if reward_channel:
-                            reward_embed = discord.Embed(
-                                title="🏆 Reward!",
-                                description=f"Gave **1** point to {reporter_user.mention} for reporting a bug.",
-                                color=discord.Color.gold(),
-                                timestamp=datetime.now(timezone.utc)
-                            )
-                            reward_embed.add_field(name="Bug Title", value=report_data.get("title", "N/A"), inline=False)
-                            reward_embed.add_field(name="Bug ID", value=str(self.report_id), inline=True)
-                            reward_embed.set_thumbnail(url=reporter_user.avatar.url if reporter_user.avatar else None)
-                            reward_embed.set_footer(
-                                text=f"Approved by {interaction.user.display_name}",
-                                icon_url=interaction.user.avatar.url if interaction.user.avatar else None
-                            )
-                            await reward_channel.send(embed=reward_embed)
-
-                # ✅ Update status
-                await self.manager.update_report_status(self.report_id, "approved")
-
-                # Send to approve log channel
-                await self.manager.update_report_status(self.report_id, "approved")
-        
-                # Send to approved channel
-                bug_approved_channel_id = os.getenv("BUG_APPROVED_CHANNEL_ID")
-                if bug_approved_channel_id:
-                    approved_channel = self.bot.get_channel(int(bug_approved_channel_id))
-                    if approved_channel:
-                        approved_embed = self._create_approved_embed(interaction, "approved")
-                        view = BugReportActionsView(self.bot, self.manager, self.report_id, self.report_data)
-                        approved_message = await approved_channel.send(embed=approved_embed, view=view)
-                        view.message = approved_message
-
-                # ✅ Delete the report message
-                if self.message:
-                    try:
-                        await self.message.delete()
-                    except discord.HTTPException:
-                        pass
-
-                # ✅ Confirm to approver
-                await interaction.followup.send(
-                    f"✅ Bug report `{self.report_id}` approved and 1 point given to the reporter.",
-                    ephemeral=True
-                )
-                self.stop()
-                return
-
+        if report_data.get("original_reporter"):
+            if eco:
+                await eco._add_points_to_data(points_recipient_id, 1)
+                reporter_user = await self.bot.fetch_user(points_recipient_id)
+                reward_channel_id = os.getenv("BUG_POINT_REWARD_CHANNEL_ID")
+                if reward_channel_id:
+                    reward_channel = self.bot.get_channel(int(reward_channel_id))
+                    if reward_channel:
+                        reward_embed = discord.Embed(
+                            title="🏆 Reward!",
+                            description=f"Gave **1** point to {reporter_user.mention} for reporting a bug.",
+                            color=discord.Color.gold(),
+                            timestamp=datetime.now(timezone.utc)
+                        )
+                        reward_embed.add_field(name="Bug Title", value=report_data.get("title", "N/A"), inline=False)
+                        reward_embed.add_field(name="Bug ID", value=str(self.report_id), inline=True)
+                        reward_embed.set_thumbnail(url=reporter_user.avatar.url if reporter_user.avatar else None)
+                        reward_embed.set_footer(
+                            text=f"Approved by {interaction.user.display_name}",
+                            icon_url=interaction.user.avatar.url if interaction.user.avatar else None
+                        )               
+                        await reward_channel.send(embed=reward_embed)
             else:
-                point_selection_view = PointSelectionView(self.bot, self.manager, self.report_id, self.report_data, self.message)
-                points_org_msg = await interaction.followup.send(
-                    embed=discord.Embed(
-                        title="🎁 Reward Points",
-                        description="Please select how many points to award.",
-                        color=discord.Color.blue()
-                    ),
-                    view=point_selection_view,
-                    ephemeral=True
-                )
-                point_selection_view.original_message = points_org_msg
-                return
-        except Exception as e:
-            await interaction.followup.send(f"❌ An error occurred while approving the report: {e}", ephemeral=True)
-            print(f"Error in approve_button: {e}")
+                await interaction.followup.send("⚠️ Points system unavailable.", ephemeral=True)
+                await self.manager.update_report_status(self.report_id, "approved")
+
+            approved_channel = self.bot.get_channel(int(os.getenv("BUG_APPROVED_CHANNEL_ID")))
+            if approved_channel:
+                approved_embed = self._create_approved_embed(interaction, "approved")
+                view = BugReportActionsView(self.bot, self.manager, self.report_id, self.report_data)
+                approved_message = await approved_channel.send(embed=approved_embed, view=view)
+                view.message = approved_message
+
+            if self.message:
+                try:
+                    await self.message.delete()
+                except discord.HTTPException:
+                    pass
+
+            await interaction.followup.send(f"✅ Bug report `{self.report_id}` approved.", ephemeral=True)
+            self.stop()
+        else:
+            point_selection_view = PointSelectionView(self.bot, self.manager, self.report_id, self.report_data, self.message, interaction.user.id)
+            points_msg = await interaction.followup.send(
+                embed=discord.Embed(title="🎁 Reward Points", description="Please select points.", color=discord.Color.blue()),
+                view=point_selection_view,
+                ephemeral=True
+            )
+            point_selection_view.original_message = points_msg
 
 
     @ui.button(label="Decline", style=discord.ButtonStyle.red, custom_id="bug_decline")
@@ -440,33 +407,31 @@ class BugReportApprovalView(ui.View):
 
 # --- View for Point Selection (for unassigned original_reporter) ---
 class PointSelectionView(ui.View):
-    def __init__(self, bot: commands.Bot, manager: BugReportManager, report_id: int, report_data: dict, original_message: discord.Message):
-        super().__init__(timeout=180) # Timeout after 3 minutes for point selection
+    def __init__(self, bot, manager, report_id, report_data, original_message, approver_id):
+        super().__init__(timeout=180)
         self.bot = bot
         self.manager = manager
         self.report_id = report_id
         self.report_data = report_data
-        self.original_message = original_message # Store original message to delete it
+        self.original_message = original_message
+        self.approver_id = approver_id  # Store approver ID for checks
 
-        for i in range(1, 6): # Buttons for 1 to 5 points
+        for i in range(1, 6):
             button = ui.Button(label=f"{i} Points", style=discord.ButtonStyle.blurple, custom_id=f"points_{i}")
             button.callback = lambda interaction, points=i: self._give_points_and_finalize(interaction, points)
             self.add_item(button)
 
-    async def interaction_check(self, interaction: Interaction) -> bool:
-        # This check needs to be more robust. It should ensure only the person
-        # who initiated the ephemeral message can click.
-        # For now, if the interaction.message (the ephemeral message) is set,
-        # we can assume it's valid, as it's sent ephemeral to the approver.
-        # If you need to restrict it further, you would store the approver's ID in __init__
-        # and check interaction.user.id against it here.
-        return True # Allows all interactions for now. Consider more restrictive logic if needed.
+    async def interaction_check(self, interaction):
+        return interaction.user.id == self.approver_id
 
     async def on_timeout(self):
         for item in self.children:
             item.disabled = True
-        if self.original_message:  # ← FIXED: use original_message not self.message
-            await self.original_message.edit(view=self)
+        if self.original_message:
+            try:
+                await self.original_message.edit(view=self)
+            except discord.HTTPException:
+                pass
 
 
     async def _give_points_and_finalize(self, interaction: Interaction, points: int):
@@ -725,7 +690,15 @@ class bugreports(commands.Cog):
     @app_commands.checks.cooldown(1, 180, key=lambda i: (i.guild_id, i.user.id))
     async def submit_bug(self, interaction: Interaction, severity: str, category: str, original_reporter: Optional[str] = None):
         await interaction.response.send_modal(BugReportModal(self.bot, category, severity, self.bug_report_manager, original_reporter))
-
+    @submit_bug.error
+    async def submit_bug_error(self, interaction: discord.Interaction, error):
+        if isinstance(error, app_commands.errors.CommandOnCooldown):
+            await interaction.response.send_message(
+                f"⏳ You’re on cooldown! Try again in {round(error.retry_after, 1)} seconds.",
+                ephemeral=True
+            )
+        else:
+            raise error
 
     @app_commands.command(name="buglist", description="Shows all pending bug reports with pagination and sorting (Admin only).")
     async def bug_list(self, interaction: Interaction):
