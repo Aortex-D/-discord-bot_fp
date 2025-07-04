@@ -88,7 +88,7 @@ async def on_ready():
             if update_channel:
                 embed = discord.Embed(
                     title="🚀 Bot has been updated",
-                    description="**Changes**\n- Updated /modify -> Now deletes data from db once user is kicked.",
+                    description="**Changes**\n- Updated bugreport.py -> Added cooldown & intervals to prevent discord rate limit.",
                     color=discord.Color.green()
                 )
                 embed.set_footer(text=f"Updated by _Suspected_")
