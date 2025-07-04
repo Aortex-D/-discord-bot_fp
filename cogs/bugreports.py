@@ -702,7 +702,7 @@ class bugreports(commands.Cog):
     @app_commands.describe(
         severity="How severe is this bug?",
         category="What part of the bot does this bug affect?",
-        original_reporter="Optional: The original reporter of the bug if different from you." # Optional original_reporter 
+        original_reporter="Optional: The original reporter of the bug if different from you."
     )
     @app_commands.choices(
         severity=[
@@ -721,9 +721,9 @@ class bugreports(commands.Cog):
             app_commands.Choice(name="Others", value="others"),
         ]
     )
+    # Add a cooldown: 1 use per user per guild every 600 seconds (10 minutes)
+    @app_commands.checks.cooldown(1, 180, key=lambda i: (i.guild_id, i.user.id))
     async def submit_bug(self, interaction: Interaction, severity: str, category: str, original_reporter: Optional[str] = None):
-        """Allows users to submit a bug report via a modal."""
-        # Pass the bot and manager instances to the modal, and original_reporter_id 
         await interaction.response.send_modal(BugReportModal(self.bot, category, severity, self.bug_report_manager, original_reporter))
 
 
